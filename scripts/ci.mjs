@@ -107,6 +107,14 @@ step('离线冒烟', () => {
   if (r.status !== 0) throw new Error(`smoke 退出码 ${r.status}`);
 });
 
+step('端到端评测（50 条，离线）', () => {
+  const r = spawnSync(NODE, ['eval/run.mjs'], {
+    cwd: root.replace(/^\/([A-Za-z]:)/, '$1'),
+    stdio: 'inherit',
+  });
+  if (r.status !== 0) throw new Error(`eval 退出码 ${r.status}`);
+});
+
 console.log('\n================ CI 汇总 ================');
 if (problems.length === 0) {
   console.log('结果：全部通过。可提交。');

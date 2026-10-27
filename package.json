@@ -1,6 +1,6 @@
 {
   "name": "fintechathon-bank-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "2026 FinTechathon 银行 AI 智能体：确定性权限与风控内核 + LLM 意图规划层",
@@ -13,6 +13,8 @@
     "test": "node --test --test-isolation=none tests/*.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "ci": "node scripts/ci.mjs",
+    "eval": "node eval/run.mjs",
+    "eval:llm": "node eval/run.mjs --llm",
     "seed": "node scripts/seed.mjs",
     "reset": "node scripts/reset.mjs",
     "llm-test": "node scripts/llm-test.mjs"
