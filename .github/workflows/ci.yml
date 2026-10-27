@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 本地 CI（密钥扫描 + 单测 + 离线冒烟）
+        run: node scripts/ci.mjs
+      - name: 真实模型联调（仅当仓库配置了密钥）
+        if: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: deepseek-flash
+        run: node scripts/llm-test.mjs
