@@ -105,11 +105,13 @@ export function assessRisk(input, state = {}) {
   }
 
   // ---- 可逆性 ----
-  if (input.reversible === false && amount > 0) {
+  // 不看金额：取消订阅金额为 0，但同样不可自助撤销
+  if (input.reversible === false) {
+    const amountText = amount > 0 ? ` ${yuan(amount)}` : '（无金额变化）';
     push(
       LEVEL.YELLOW,
       'R-IRREVERSIBLE',
-      `该操作不可由用户自助撤销（${input.tool} ${yuan(amount)}），需确认后执行`,
+      `该操作不可由用户自助撤销（${input.tool}${amountText}），需确认后执行`,
     );
   }
 

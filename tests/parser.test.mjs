@@ -59,6 +59,13 @@ test('订阅取消与列表', () => {
   assert.equal(parse('我有哪些订阅').intent, INTENT.SUB_LIST);
 });
 
+test('批量取消识别为多步意图', () => {
+  assert.equal(parse('把这个月的自动续费全取消').intent, INTENT.SUB_CANCEL_ALL);
+  assert.equal(parse('取消所有订阅').intent, INTENT.SUB_CANCEL_ALL);
+  // 单条取消不能被误判成批量
+  assert.equal(parse('取消云音乐黑胶').intent, INTENT.SUB_CANCEL);
+});
+
 test('抽取金额不把手机号当金额', () => {
   const a = extractAmount('转给 13800000003 500 块');
   assert.equal(a.cents, 50_000);

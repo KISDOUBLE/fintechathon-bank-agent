@@ -140,8 +140,51 @@ test('订阅：列出与取消', async () => {
   assert.match(done.reply, /已取消/);
 });
 
-test('审计链完整且可复原', async () => {
+test('批量取消订阅：列目标 → 一次确认 → 逐条执行 → 汇总', async () => {
   const app = makeApp();
+  const out = await chat(app, '把这个月的自动续费全取消');
+  assert.equal(out.status, 'need_confirm');
+  assert.equal(out.confirm.items.length, 3);
+  assert.match(out.confirm.summary, /批量取消 3 项/);
+  assert.match(out.confirm.summary, /¥49\.00/);
+
+  // 未确认前，一条都不能动
+  assert.equal(app.db.subscriptions('u_1001').filter((s) => s.status === 'active').length, 3);
+
+  const done = await confirm(app, out.confirm.token);
+  assert.equal(done.status, 'ok');
+  assert.match(done.reply, /3\/3 项成功/);
+  assert.equal(app.db.subscriptions('u_1001').filter((s) => s.status === 'active').length, 0);
+  assert.equal(done.data.savedCents, 4_900);
+});
+
+test('任务级授权只覆盖授权范围内的对象', async () => {
+  const app = makeApp();
+  const actor = app.db.getUser('u_1001');
+
+  // 授权只给了 sub_1，拿它去取消 sub_2：不覆盖，仍需确认
+  const outOfScope = app.registry.execute('subscription_cancel', { subscriptionId: 'sub_2' }, {
+    actor,
+    traceId: 'g-scope',
+    confirmed: false,
+    grant: { id: 'g1', tool: 'subscription_cancel', scopeIds: ['sub_1'], expiresAt: Date.now() + 60_000 },
+  });
+  assert.equal(outOfScope.ok, false);
+  assert.equal(outOfScope.code, 'CONFIRMATION_REQUIRED');
+  assert.equal(app.db.subscriptions('u_1001').find((s) => s.id === 'sub_2').status, 'active');
+
+  // 授权覆盖 sub_2 时，免二次确认直接执行
+  const inScope = app.registry.execute('subscription_cancel', { subscriptionId: 'sub_2' }, {
+    actor,
+    traceId: 'g-scope-2',
+    confirmed: false,
+    grant: { id: 'g2', tool: 'subscription_cancel', scopeIds: ['sub_2'], expiresAt: Date.now() + 60_000 },
+  });
+  assert.equal(inScope.ok, true);
+  assert.equal(app.db.subscriptions('u_1001').find((s) => s.id === 'sub_2').status, 'cancelled');
+});
+
+test('审计链完整且可复原', async () => {  const app = makeApp();
   await chat(app, '查一下余额');
   const out = await chat(app, '转给王小明 500 元');
   await confirm(app, out.confirm.token);

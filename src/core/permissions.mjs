@@ -86,9 +86,11 @@ export function authorize({ actor, tool, args = {}, ctx = {} }) {
     );
   }
 
-  // 任务级动态授权：只覆盖 L2，且作用域必须精确匹配工具
+  // 任务级动态授权：只覆盖 L2，工具必须匹配，且对象必须在授权范围内
   const grant = ctx.grant;
-  if (grant && grant.tool === tool && grant.expiresAt > Date.now() && level === LEVELS.L2) {
+  const inScope =
+    !grant?.scopeIds || grant.scopeIds.includes(args.subscriptionId ?? args.payee ?? args.accountId);
+  if (grant && grant.tool === tool && grant.expiresAt > Date.now() && level === LEVELS.L2 && inScope) {
     reasons.push({
       rule: 'P-GRANT',
       detail: `命中任务级授权 ${grant.id}（工具 ${tool}，剩余 ${Math.ceil((grant.expiresAt - Date.now()) / 1000)} 秒）`,

@@ -13,6 +13,7 @@ const INTENT = Object.freeze({
   BILL: 'bill_analyze',
   SUB_LIST: 'subscription_list',
   SUB_CANCEL: 'subscription_cancel',
+  SUB_CANCEL_ALL: 'subscription_cancel_all',
   FX: 'fx_quote',
   REJECTED: 'rejected',
   UNKNOWN: 'unknown',
@@ -114,6 +115,36 @@ export function parse(rawText, ctx = {}) {
         reason: 'MULTI_TURN_AMOUNT_FILL',
       };
     }
+  }
+
+  // 批量取消要先于单条取消判断：“全部/所有/都”是范围词
+  if (
+    /(所有|全部|都|全|每一?项|统统|挨个)/.test(text) &&
+    /(订阅|自动续费|代扣|会员)/.test(text) &&
+    /(取消|关掉|停掉|解约|退订|退了|关了)/.test(text)
+  ) {
+    return {
+      intent: INTENT.SUB_CANCEL_ALL,
+      confidence: 0.9,
+      slots: {},
+      missing: [],
+      reason: 'SUB_CANCEL_ALL',
+    };
+  }
+
+  // “取消云音乐黑胶”这类动词开头的说法：商户名任意，但排除资金类动词
+  if (/^(取消|退订|解约|关掉|关闭)/.test(text) && !/(转账|汇款|打款|付款|订单|账单|支付)/.test(text)) {
+    const merchant = text
+      .replace(/^(取消|退订|解约|关掉|关闭)/, '')
+      .replace(/(的)?(订阅|会员|自动续费|代扣)$/, '')
+      .trim();
+    return {
+      intent: INTENT.SUB_CANCEL,
+      confidence: merchant ? 0.82 : 0.7,
+      slots: { merchant: merchant || null },
+      missing: merchant ? [] : ['subscriptionId'],
+      reason: 'SUB_CANCEL_VERB_FIRST',
+    };
   }
 
   if (/(取消|解约|退订).{0,6}(订阅|会员|自动续费|代扣)/.test(text) || /(订阅|会员).{0,6}(取消|解约|退订)/.test(text)) {

@@ -120,6 +120,10 @@ export class BankAgent {
       });
     }
 
+    if (plan.kind === 'batch') {
+      return this.evaluateBatch({ traceId: traceId2, userId, parsed, plan, session, newDevice });
+    }
+
     return this.evaluateAndRun({ traceId: traceId2, userId, parsed, plan, session, newDevice, channel });
   }
 
@@ -166,6 +170,10 @@ export class BankAgent {
 
     session.pendingConfirm = null;
     this.audit.append({ traceId: traceId2, actor: userId, event: 'confirm.accepted', detail: { tool: pending.plan.tool, level: pending.authz.level } });
+
+    if (pending.plan?.kind === 'batch') {
+      return this.executeBatch({ traceId: traceId2, userId, pending });
+    }
 
     const result = this.registry.execute(pending.plan.tool, pending.plan.args, {
       actor: this.db.getUser(userId),
@@ -221,6 +229,8 @@ export class BankAgent {
         return { tool: 'bill_analyze', args: { days: s.days ?? 30 }, stepId: 's1' };
       case INTENT.SUB_LIST:
         return { tool: 'subscription_list', args: {}, stepId: 's1' };
+      case INTENT.SUB_CANCEL_ALL:
+        return { kind: 'batch', tool: 'subscription_cancel', stepId: 'batch' };
       case INTENT.SUB_CANCEL:
         return { tool: 'subscription_cancel', args: { subscriptionId: s.subscriptionId ?? s.merchant ?? '' }, stepId: 's1' };
       case INTENT.TRANSFER:
@@ -389,6 +399,139 @@ export class BankAgent {
     });
   }
 
+  /**
+   * 批量计划：列目标 → 逐条判定 → 一次性确认（任务级授权）→ 逐条执行 → 汇总。
+   * 多步任务的四段：计划、确认、执行、留痕。
+   */
+  evaluateBatch({ traceId, userId, parsed, plan, session, newDevice }) {
+    const actor = this.db.getUser(userId);
+
+    // 第 1 步：只读列目标（L1，自动执行）
+    const listed = this.registry.execute('subscription_list', {}, {
+      actor, traceId, stepId: 's1', confirmed: false, newDevice,
+    });
+    if (!listed.ok) {
+      return this.finalize(traceId, { status: 'error', level: LEVEL.YELLOW, reply: `读取订阅失败：${listed.message}`, rules: [] });
+    }
+
+    const active = listed.data.items.filter((i) => i.status === 'active');
+    if (active.length === 0) {
+      return this.finalize(traceId, { status: 'ok', level: LEVEL.GREEN, reply: '当前没有生效中的订阅，不需要取消。', rules: [] });
+    }
+
+    const items = active.map((i) => ({ id: i.id, merchant: i.merchant, amountCents: i.amountCents, amountText: i.amountText }));
+    const totalCents = items.reduce((s, i) => s + i.amountCents, 0);
+
+    // 第 2 步：逐条判定，只读快照，不改任何状态
+    const perItem = items.map(() =>
+      assessRisk({ tool: 'subscription_cancel', amountCents: 0, reversible: false, payeeFirstTime: false }, {}),
+    );
+    const red = perItem.find((r) => r.level === LEVEL.RED);
+    if (red) {
+      return this.finalize(traceId, {
+        status: 'blocked',
+        level: LEVEL.RED,
+        reply: `批量取消被拦截：${red.hits[0]?.detail ?? '命中红色规则'}。`,
+        rules: red.hits.map((h) => ({ rule: h.rule, detail: h.detail })),
+      });
+    }
+
+    // 第 3 步：逐条权限预判（此时还没拿到授权）
+    for (const it of items) {
+      const a = authorize({ actor, tool: 'subscription_cancel', args: { userId, subscriptionId: it.id }, ctx: { newDevice } });
+      if (!a.allowed) {
+        return this.finalize(traceId, {
+          status: 'blocked',
+          level: LEVEL.RED,
+          reply: `批量取消被拒绝：${a.reasons[0]?.detail ?? a.denyCode}`,
+          rules: a.reasons.map((r) => ({ rule: r.rule, detail: r.detail })),
+        });
+      }
+    }
+
+    // 一次性确认换取“限定对象 + 限时”的任务级授权
+    const grant = {
+      id: `grant_${randomUUID().slice(0, 8)}`,
+      tool: 'subscription_cancel',
+      scopeIds: items.map((i) => i.id),
+      expiresAt: Date.now() + CONFIRM_TTL_MS,
+    };
+
+    const risk = perItem[0];
+    const pending = {
+      token: randomUUID(),
+      traceId,
+      plan,
+      parsed,
+      risk,
+      authz: { allowed: true, level: 'L2', needConfirm: true, needMfa: false, denyCode: null, reasons: [] },
+      newDevice,
+      dailySpentCents: 0,
+      mfaRequired: false,
+      mfaCode: null,
+      expiresAt: Date.now() + CONFIRM_TTL_MS,
+      attempts: 0,
+      items,
+      grant,
+      totalCents,
+    };
+    session.pendingConfirm = pending;
+
+    this.audit.append({
+      traceId,
+      actor: userId,
+      event: 'confirm.requested',
+      level: risk.level,
+      detail: { tool: 'subscription_cancel', mode: 'batch', count: items.length, grantId: grant.id, scopeIds: grant.scopeIds },
+    });
+
+    return this.finalize(traceId, {
+      status: 'need_confirm',
+      level: risk.level,
+      reply: this.confirmReply(pending),
+      rules: risk.hits.map((h) => ({ rule: h.rule, detail: h.detail })),
+      risk,
+      decision: pending.authz,
+      confirm: this.publicConfirm(pending),
+    });
+  }
+
+  /** 逐条执行批量计划；单条失败不影响其余，最后汇总 */
+  executeBatch({ traceId, userId, pending }) {
+    const actor = this.db.getUser(userId);
+    const outcomes = [];
+    pending.items.forEach((item, i) => {
+      const res = this.registry.execute('subscription_cancel', { subscriptionId: item.id }, {
+        actor,
+        traceId,
+        stepId: `s${i + 2}`,
+        confirmed: true,
+        newDevice: pending.newDevice,
+        grant: pending.grant,
+      });
+      outcomes.push({ ...item, ok: res.ok, message: res.ok ? '已取消' : (res.message ?? '失败') });
+    });
+
+    const okCount = outcomes.filter((o) => o.ok).length;
+    const saved = outcomes.filter((o) => o.ok).reduce((s, o) => s + o.amountCents, 0);
+
+    this.audit.append({
+      traceId,
+      actor: userId,
+      event: 'batch.completed',
+      detail: { total: outcomes.length, ok: okCount, savedCents: saved, grantId: pending.grant.id },
+    });
+
+    const lines = outcomes.map((o) => `${o.ok ? '✔' : '✖'} ${o.merchant} ${o.amountText} — ${o.message}`).join('\n');
+    return this.finalize(traceId, {
+      status: okCount === outcomes.length ? 'ok' : okCount > 0 ? 'partial' : 'error',
+      level: pending.risk.level,
+      reply: `批量取消完成：${okCount}/${outcomes.length} 项成功。\n${lines}${saved ? `\n合计每月少扣 ${formatCents(saved)}。` : ''}`,
+      rules: pending.risk.hits.map((h) => ({ rule: h.rule, detail: h.detail })),
+      data: { outcomes, savedCents: saved },
+    });
+  }
+
   respondFromTool(traceId, userId, parsed, plan, result, risk, authz) {
     if (!result.ok) {
       return this.finalize(traceId, {
@@ -448,7 +591,12 @@ export class BankAgent {
       mfaRequired: pending.mfaRequired,
       // 演示用：真实环境由短信/人脸通道下发，这里显式标注是模拟，不冒充真实认证
       demoMfaCode: pending.mfaRequired ? pending.mfaCode : null,
-      summary: summarize(pending.plan),
+      summary: pending.items
+        ? `批量取消 ${pending.items.length} 项订阅，合计每月 ${formatCents(pending.totalCents)}`
+        : summarize(pending.plan),
+      items: pending.items
+        ? pending.items.map((i) => ({ id: i.id, merchant: i.merchant, amountText: i.amountText }))
+        : null,
       expiresInSec: Math.max(0, Math.ceil((pending.expiresAt - Date.now()) / 1000)),
       reason: pending.risk.hits.map((h) => ({ rule: h.rule, detail: h.detail })),
     };
@@ -470,6 +618,11 @@ export class BankAgent {
   }
 
   confirmReply(pending) {
+    if (pending.items) {
+      const lines = pending.items.map((i) => `· ${i.merchant} ${i.amountText}/月`).join('\n');
+      const hits = pending.risk.hits.map((h) => `· ${h.rule}：${h.detail}`).join('\n');
+      return `请确认批量取消 ${pending.items.length} 项订阅：\n${lines}\n合计每月 ${formatCents(pending.totalCents)}。\n判定：${levelName(pending.risk.level)}\n${hits}\n确认后逐条执行，5 分钟内有效。`;
+    }
     const lines = pending.risk.hits.map((h) => `· ${h.rule}：${h.detail}`).join('\n');
     const mfa = pending.mfaRequired ? `\n需要 L3 多因子认证。演示验证码：${pending.mfaCode}（真实环境经短信下发）` : '';
     return `请确认以下操作：\n${summarize(pending.plan)}\n判定：${levelName(pending.risk.level)}\n${lines}${mfa}\n回复“确认”并输入验证码即可执行，5 分钟内有效。`;
