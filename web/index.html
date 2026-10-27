@@ -88,6 +88,7 @@
   <h3>需要你确认这笔操作</h3>
   <div class="summary" id="confirmSummary"></div>
   <div id="confirmRules"></div>
+  <div class="demo" id="tokenLine"></div>
   <div class="code" id="mfaRow" style="display:none">
     <input id="mfaCode" placeholder="6 位验证码" maxlength="6" inputmode="numeric" />
     <span class="demo" id="demoCode"></span>
@@ -150,11 +151,12 @@ async function send(text){
 }
 
 function renderReply(out){
-  addMsg('agent', `${levelBadge(out.level)}<div>${nl2br(out.reply)}</div>${rulesHtml(out.rules)}`);
+  addMsg('agent', `${levelBadge(out.level)}<div>${nl2br(out.reply)}</div>${rulesHtml(out.rules)}<div class="demo">trace ${escapeHtml(out.traceId ?? '')}</div>`);
   if(out.status === 'need_confirm' && out.confirm){
     state.pending = out.confirm;
     $('confirmSummary').textContent = out.confirm.summary;
     $('confirmRules').innerHTML = rulesHtml(out.confirm.reason);
+    $('tokenLine').textContent = `确认令牌 ${String(out.confirm.token).slice(0, 8)}… · 一次性 · ${out.confirm.expiresInSec} 秒内有效 · 级别 ${out.confirm.level}`;
     $('mfaRow').style.display = out.confirm.mfaRequired ? 'flex' : 'none';
     $('demoCode').textContent = out.confirm.demoMfaCode ? `演示验证码：${out.confirm.demoMfaCode}` : '';
     $('mfaCode').value = out.confirm.mfaRequired ? '' : '000000';

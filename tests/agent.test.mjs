@@ -184,6 +184,30 @@ test('任务级授权只覆盖授权范围内的对象', async () => {
   assert.equal(app.db.subscriptions('u_1001').find((s) => s.id === 'sub_2').status, 'cancelled');
 });
 
+test('确认令牌一次性：用过即失效', async () => {
+  const app = makeApp();
+  const out = await chat(app, '转给王小明 500 元');
+  const first = await confirm(app, out.confirm.token);
+  assert.equal(first.status, 'ok');
+
+  const second = await confirm(app, out.confirm.token);
+  assert.equal(second.status, 'error');
+  // 不能因为重放而重复扣款
+  assert.equal(app.db.accountOf('u_1001').balance_cents, 5_180_000);
+});
+
+test('确认令牌过期失效', async () => {
+  const app = makeApp();
+  const out = await chat(app, '转给王小明 500 元');
+  const pending = app.agent.sessions.get('u_1001').pendingConfirm;
+  pending.expiresAt = Date.now() - 1;
+
+  const r = await confirm(app, out.confirm.token);
+  assert.equal(r.status, 'error');
+  assert.match(r.reply, /超时/);
+  assert.equal(app.db.accountOf('u_1001').balance_cents, 5_230_000);
+});
+
 test('审计链完整且可复原', async () => {  const app = makeApp();
   await chat(app, '查一下余额');
   const out = await chat(app, '转给王小明 500 元');
