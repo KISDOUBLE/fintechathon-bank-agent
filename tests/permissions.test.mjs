@@ -11,16 +11,16 @@ test('只读工具为 L1，不需要确认', () => {
   assert.equal(r.needConfirm, false);
 });
 
-test('转账基础 L2，达到金额线抬升 L3', () => {
+test('转账基础 L2；判定要求 L3 时抬升并要多因子', () => {
   const small = authorize({ actor, tool: 'transfer_create', args: { amountCents: 50_000 } });
   assert.equal(small.level, 'L2');
   assert.equal(small.needConfirm, true);
   assert.equal(small.needMfa, false);
 
-  const big = authorize({ actor, tool: 'transfer_create', args: { amountCents: AMOUNT_ESCALATE_CENTS } });
+  const big = authorize({ actor, tool: 'transfer_create', args: { amountCents: 150_000 }, ctx: { minLevel: 'L3' } });
   assert.equal(big.level, 'L3');
   assert.equal(big.needMfa, true);
-  assert.ok(big.reasons.some((x) => x.rule === 'P-AMOUNT-ESCALATE'));
+  assert.ok(big.reasons.some((x) => x.rule === 'P-RISK-ESCALATE'));
 });
 
 test('跨用户访问一律 X 硬拒绝', () => {

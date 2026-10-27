@@ -47,12 +47,13 @@ await check('转账 500：黄色 + 确认 + 落账', async () => {
   assert(app.db.accountOf('u_1001').balance_cents === before - 50_000, '余额未按预期扣减');
 });
 
-await check('转账 5000：L3 多因子 + 超限说明', async () => {
+await check('转账 5000：红色强验证 + 多因子', async () => {
   const out = await app.agent.handle({ userId: 'u_1001', text: '转给王小明 5000 元' });
   assert(out.status === 'need_confirm', `status=${out.status}`);
+  assert(out.level === 'red', `level=${out.level}`);
   assert(out.confirm.level === 'L3', `level=${out.confirm.level}`);
   assert(out.confirm.mfaRequired === true, '未要求多因子');
-  assert(out.rules.some((r) => r.rule === 'R-AMT-SINGLE-WARN' && /¥5,000\.00/.test(r.detail)), '缺金额阈值说明');
+  assert(out.rules.some((r) => r.rule === 'R-AMT-RED-VERIFY' && /¥1,000\.00 免强验证额度/.test(r.detail)), '缺金额阈值说明');
 });
 
 await check('注入拦截：不产生资金动作', async () => {

@@ -148,7 +148,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { pending: null, busy: false, token: localStorage.getItem('bank_token') || null, me: null, mode: 'login' };
 
-const LEVEL_TEXT = { green: '绿色 · 自动执行', yellow: '黄色 · 需确认', red: '红色 · 拦截' };
+const LEVEL_TEXT = { green: '绿色 · 自动执行', yellow: '黄色 · 需确认', red: '红色 · 强验证' };
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const nl2br = (s) => escapeHtml(s).replace(/\n/g,'<br>');
 

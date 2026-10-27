@@ -22,8 +22,8 @@ export const TOOL_LEVEL = Object.freeze({
   subscription_cancel: LEVELS.L2,
 });
 
-/** 金额抬升线：达到 ¥5,000 的 L2 操作按 L3 处理 */
-export const AMOUNT_ESCALATE_CENTS = DEFAULT_THRESHOLDS.singleWarnCents;
+/** 金额抬升基准：日累计超过该值即按 L3 处理（与赛题 ¥1,000 口径一致） */
+export const AMOUNT_ESCALATE_CENTS = DEFAULT_THRESHOLDS.yellowDailyCents;
 
 /**
  * @param {object} p
@@ -60,11 +60,12 @@ export function authorize({ actor, tool, args = {}, ctx = {} }) {
   const t = { ...DEFAULT_THRESHOLDS, ...(ctx.thresholds || {}) };
   const amount = args.amountCents ?? 0;
 
-  if (RANK[level] >= RANK.L2 && amount >= AMOUNT_ESCALATE_CENTS) {
-    level = LEVELS.L3;
+  // 三色判定给出的最低级别（红色 → 强验证）
+  if (ctx.minLevel && RANK[ctx.minLevel] > RANK[level]) {
+    level = ctx.minLevel;
     reasons.push({
-      rule: 'P-AMOUNT-ESCALATE',
-      detail: `金额 ¥${(amount / 100).toFixed(2)} 达到 ¥${(AMOUNT_ESCALATE_CENTS / 100).toFixed(2)}，级别由 ${base} 抬升为 L3`,
+      rule: 'P-RISK-ESCALATE',
+      detail: `三色判定要求 ${ctx.minLevel}，工具基础级别 ${base} 被抬升`,
     });
   }
 
@@ -78,11 +79,11 @@ export function authorize({ actor, tool, args = {}, ctx = {} }) {
 
   // 日累计硬上限：权限层直接拒绝，不再走确认
   const dailyAfter = (ctx.dailySpentCents ?? 0) + amount;
-  if (RANK[level] >= RANK.L2 && dailyAfter > t.dailyBlockCents) {
+  if (RANK[level] >= RANK.L2 && dailyAfter > t.blockDailyCents) {
     return deny(
       'daily_limit',
       LEVELS.X,
-      `当日累计将达 ¥${(dailyAfter / 100).toFixed(2)}，超过硬上限 ¥${(t.dailyBlockCents / 100).toFixed(2)}`,
+      `当日累计将达 ¥${(dailyAfter / 100).toFixed(2)}，超过硬上限 ¥${(t.blockDailyCents / 100).toFixed(2)}`,
     );
   }
 

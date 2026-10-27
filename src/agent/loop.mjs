@@ -13,6 +13,9 @@ import { parse, INTENT } from './parser.mjs';
 
 const CONFIRM_TTL_MS = 5 * 60 * 1000;
 const DAY_MS = 86_400_000;
+const FAIL_LIMIT = 3; // 连续失败 3 次触发熔断
+const FAIL_WINDOW_MS = 10 * 60 * 1000;
+const LOCK_MS = 5 * 60 * 1000;
 
 export class BankAgent {
   constructor({ db, audit, registry, llm = null }) {
@@ -22,6 +25,44 @@ export class BankAgent {
     this.llm = llm;
     /** @type {Map<string, any>} */
     this.sessions = new Map();
+    /** 熔断计数：userId → {count, firstAt, until} */
+    this.failures = new Map();
+  }
+
+  /** 熔断检查：命中返回剩余锁定秒数，否则 null */
+  circuitOpen(userId) {
+    const rec = this.failures.get(userId);
+    if (!rec) return null;
+    if (rec.until && rec.until > Date.now()) return Math.ceil((rec.until - Date.now()) / 1000);
+    if (rec.until && rec.until <= Date.now()) this.failures.delete(userId);
+    return null;
+  }
+
+  recordFailure(userId, reason) {
+    const now = Date.now();
+    const rec = this.failures.get(userId) ?? { count: 0, firstAt: now, until: 0 };
+    if (now - rec.firstAt > FAIL_WINDOW_MS) {
+      rec.count = 0;
+      rec.firstAt = now;
+    }
+    rec.count += 1;
+    rec.reason = reason;
+    if (rec.count >= FAIL_LIMIT) {
+      rec.until = now + LOCK_MS;
+      rec.count = 0;
+      this.audit.append({
+        traceId: this.trace('circuit'),
+        actor: userId,
+        event: 'circuit.open',
+        level: LEVEL.RED,
+        detail: { reason, lockSec: LOCK_MS / 1000 },
+      });
+    }
+    this.failures.set(userId, rec);
+  }
+
+  resetFailures(userId) {
+    this.failures.delete(userId);
   }
 
   trace(prefix = 'tr') {
@@ -51,9 +92,21 @@ export class BankAgent {
       detail: { channel, text: scrub(text).slice(0, 200), length: String(text).length },
     });
 
+    // 熔断：连续失败后先锁定，不给继续试错的机会
+    const lockSec = this.circuitOpen(userId);
+    if (lockSec) {
+      return this.finalize(traceId2, {
+        status: 'blocked',
+        level: LEVEL.RED,
+        reply: `连续失败次数过多，会话已临时锁定，请 ${lockSec} 秒后再试，或联系人工客服。`,
+        rules: [{ rule: 'CIRCUIT-OPEN', detail: `会话锁定中，剩余 ${lockSec} 秒` }],
+      });
+    }
+
     // 1) 护栏
     const guard = inspectInput(text);
     if (guard.blocked) {
+      this.recordFailure(userId, 'guard.blocked');
       this.audit.append({
         traceId: traceId2,
         actor: userId,
@@ -148,6 +201,7 @@ export class BankAgent {
     if (pending.mfaRequired) {
       if (String(mfaCode ?? '') !== pending.mfaCode) {
         pending.attempts += 1;
+        this.recordFailure(userId, 'confirm.mfa_failed');
         this.audit.append({ traceId: traceId2, actor: userId, event: 'confirm.mfa_failed', level: LEVEL.RED, detail: { attempts: pending.attempts } });
         if (pending.attempts >= 3) {
           session.pendingConfirm = null;
@@ -333,7 +387,8 @@ export class BankAgent {
       detail: { tool: plan.tool, level: risk.level, hits: risk.hits },
     });
 
-    if (risk.level === LEVEL.RED) {
+    // 红色不等于拒绝：红色是“强验证”，只有硬拦截（越限/熔断）才拒绝
+    if (risk.block) {
       session.pendingConfirm = null;
       return this.finalize(traceId, {
         status: 'blocked',
@@ -348,7 +403,12 @@ export class BankAgent {
       actor,
       tool: plan.tool,
       args: { userId, amountCents: args.amountCents ?? 0 },
-      ctx: { newDevice, dailySpentCents: riskState.dailySpentCents },
+      ctx: {
+        newDevice,
+        dailySpentCents: riskState.dailySpentCents,
+        // 红色 → 强验证（L3）；黄色 → 二次确认（L2）
+        minLevel: risk.level === LEVEL.RED ? 'L3' : null,
+      },
     });
 
     this.audit.append({
@@ -457,7 +517,7 @@ export class BankAgent {
 
     // 第 3 步：逐条权限预判（此时还没拿到授权）
     for (const it of items) {
-      const a = authorize({ actor, tool: 'subscription_cancel', args: { userId, subscriptionId: it.id }, ctx: { newDevice } });
+      const a = authorize({ actor, tool: 'subscription_cancel', args: { userId, subscriptionId: it.id }, ctx: { newDevice, minLevel: 'L2' } });
       if (!a.allowed) {
         return this.finalize(traceId, {
           status: 'blocked',
@@ -553,6 +613,7 @@ export class BankAgent {
 
   respondFromTool(traceId, userId, parsed, plan, result, risk, authz) {
     if (!result.ok) {
+      this.recordFailure(userId, `tool.${result.code ?? 'error'}`);
       return this.finalize(traceId, {
         status: 'error',
         level: LEVEL.YELLOW,
@@ -562,6 +623,7 @@ export class BankAgent {
       });
     }
     const reply = this.composeReply(plan, result.data, risk);
+    this.resetFailures(userId);
     this.audit.append({ traceId, actor: userId, event: 'reply.sent', detail: { tool: plan.tool, level: risk.level } });
     return this.finalize(traceId, {
       status: 'ok',
@@ -633,7 +695,7 @@ export class BankAgent {
 
   redReply(risk) {
     const lines = risk.hits.map((h) => `· ${h.rule}：${h.detail}`).join('\n');
-    return `这笔操作没有执行。判定为红色。\n${lines}\n如需大额操作，请走柜面或人工客服复核。`;
+    return `这笔操作没有执行，属于硬拦截。\n${lines}\n如需办理，请走柜面或人工客服。`;
   }
 
   confirmReply(pending) {
