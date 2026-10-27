@@ -120,7 +120,7 @@ export function parse(rawText, ctx = {}) {
   // 批量取消要先于单条取消判断：“全部/所有/都”是范围词
   if (
     /(所有|全部|都|全|每一?项|统统|挨个)/.test(text) &&
-    /(订阅|自动续费|代扣|会员)/.test(text) &&
+    /(订阅|自动续费|自动扣费|扣费|续费|代扣|会员)/.test(text) &&
     /(取消|关掉|停掉|解约|退订|退了|关了)/.test(text)
   ) {
     return {
@@ -158,7 +158,7 @@ export function parse(rawText, ctx = {}) {
     };
   }
 
-  if (/(订阅|自动续费|代扣|会员)/.test(text) && !/(取消|解约|退订)/.test(text)) {
+  if (/(订阅|自动续费|自动扣费|扣费|续费|代扣|会员)/.test(text) && !/(取消|解约|退订)/.test(text)) {
     return { intent: INTENT.SUB_LIST, confidence: 0.88, slots: {}, missing: [], reason: 'SUB_LIST' };
   }
 

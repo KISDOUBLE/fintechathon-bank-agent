@@ -60,8 +60,9 @@ export function createDeepSeekClient(cfg = llmConfig()) {
   /** 意图分类：只返回结构，置信度由模型自评，用于规则兜底 */
   async function classifyIntent(text) {
     const sys = '你是银行意图分类器。只输出 JSON，字段：intent(string), confidence(number 0-1), slots(object)。' +
-      'intent 只能是 query_balance|list_transactions|transfer|bill_analyze|subscription_list|subscription_cancel|fx_quote|unknown。' +
-      'transfer 的 slots 字段为 payee(string)、amountCents(integer, 单位分)、memo(string)。禁止输出其他内容。';
+      'intent 只能是 query_balance|list_transactions|transfer|bill_analyze|subscription_list|subscription_cancel|subscription_cancel_all|fx_quote|unknown。' +
+      '用户说“所有/全部/都”并涉及订阅时用 subscription_cancel_all。' +
+      'transfer 的 slots 字段为 payee(string)、amountCents(integer, 单位分)、memo(string)；memo 只在用户明确说了备注时填写。禁止输出其他内容。';
     const { message } = await chat(
       [
         { role: 'system', content: sys },

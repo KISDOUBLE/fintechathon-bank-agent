@@ -204,18 +204,37 @@ export class BankAgent {
   async parseIntent(text, session) {
     const ctx = { pending: session.pendingParse ?? null };
     const ruleResult = parse(text, ctx);
+    let result = ruleResult;
+
     // 规则置信度不足且配置了模型时，交给模型补意图；模型只产出结构，不执行
     if (this.llm && ruleResult.confidence < 0.6) {
       try {
         const refined = await this.llm.classifyIntent(text);
         if (refined && refined.confidence > ruleResult.confidence) {
-          return { ...refined, slots: { ...ruleResult.slots, ...(refined.slots || {}) }, reason: `${ruleResult.reason}+LLM` };
+          const slots = { ...ruleResult.slots, ...(refined.slots || {}) };
+          // 模型补的备注必须能在原句里找到，否则视为编造，丢弃
+          if (slots.memo && !text.includes(slots.memo)) delete slots.memo;
+          // 金额必须是正整数分
+          if (slots.amountCents !== undefined && (!Number.isSafeInteger(slots.amountCents) || slots.amountCents <= 0)) {
+            delete slots.amountCents;
+          }
+          result = { ...refined, slots, reason: `${ruleResult.reason}+LLM` };
         }
-      } catch (err) {
+      } catch {
         // 外部模型失败不阻塞主流程，退回规则结论
       }
     }
-    return ruleResult;
+
+    // 安全网：即使模型判成单条取消，句子里有“所有/全部/都”就升级为批量
+    if (
+      result.intent === INTENT.SUB_CANCEL &&
+      /(所有|全部|都|全)/.test(text) &&
+      /(订阅|会员|扣费|续费|续订|代扣)/.test(text)
+    ) {
+      result = { ...result, intent: INTENT.SUB_CANCEL_ALL, reason: `${result.reason}+RANGE_UPGRADE` };
+    }
+
+    return result;
   }
 
   buildPlan(parsed) {

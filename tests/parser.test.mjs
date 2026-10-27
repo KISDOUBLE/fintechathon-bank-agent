@@ -62,6 +62,9 @@ test('订阅取消与列表', () => {
 test('批量取消识别为多步意图', () => {
   assert.equal(parse('把这个月的自动续费全取消').intent, INTENT.SUB_CANCEL_ALL);
   assert.equal(parse('取消所有订阅').intent, INTENT.SUB_CANCEL_ALL);
+  // “扣费”不等于“代扣”，也要能认出来
+  assert.equal(parse('那些自动扣费的都退了吧').intent, INTENT.SUB_CANCEL_ALL);
+  assert.equal(parse('帮我把会员都关了').intent, INTENT.SUB_CANCEL_ALL);
   // 单条取消不能被误判成批量
   assert.equal(parse('取消云音乐黑胶').intent, INTENT.SUB_CANCEL);
 });
