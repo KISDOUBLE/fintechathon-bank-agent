@@ -11,4 +11,5 @@ submission/*.zip
 submission/*.pdf
 submission/*.tar.gz
 submission/*.7z
+submission/*.bundle
 submission/manifest.json
