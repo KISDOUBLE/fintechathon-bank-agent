@@ -47,6 +47,52 @@ export class BankDB {
     return verifyPin(pin, row.pin_salt, row.pin_hash) ? row : null;
   }
 
+  /** 开户注册：建用户 + 活期账户 + 演示见面礼（复式记账），返回用户与账户 */
+  registerUser({ name, phone, pin, welcomeCents = 100_000 }) {
+    if (this.getUserByPhone(phone)) throw codedError('PHONE_TAKEN', '该手机号已注册');
+    const id = `u_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    const acctId = `acc_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    const now = iso();
+
+    return this.tx(() => {
+      this.db
+        .prepare('INSERT INTO users (id, name, phone, kyc_level, locked, created_at) VALUES (?, ?, ?, 1, 0, ?)')
+        .run(id, name, phone, now);
+      this.setUserPin(id, pin);
+      this.db
+        .prepare('INSERT INTO accounts (id, user_id, kind, balance_cents) VALUES (?, ?, ?, ?)')
+        .run(acctId, id, 'checking', welcomeCents);
+
+      if (welcomeCents > 0) {
+        const txnId = `txn_welcome_${id}`;
+        this.db
+          .prepare(
+            `INSERT INTO transactions (id, trace_id, type, status, amount_cents, from_account, to_account, memo, category, created_at)
+             VALUES (?, 'register', 'topup', 'committed', ?, ?, ?, '开户演示资金', '开户', ?)`,
+          )
+          .run(txnId, welcomeCents, EQUITY_ACCOUNT, acctId, now);
+        const insEntry = this.db.prepare('INSERT INTO entries (txn_id, account_id, delta_cents, created_at) VALUES (?, ?, ?, ?)');
+        insEntry.run(txnId, EQUITY_ACCOUNT, -welcomeCents, now);
+        insEntry.run(txnId, acctId, welcomeCents, now);
+        this.assertBalanced(txnId);
+      }
+      return this.db.prepare('SELECT id, name, phone FROM users WHERE id = ?').get(id);
+    });
+  }
+
+  /** 新增收款人；手机号若已注册，自动关联内部账户 */
+  addContact(userId, { name, phone = null, alias = null }) {
+    const exists = this.db.prepare('SELECT id FROM contacts WHERE user_id = ? AND name = ?').get(userId, name);
+    if (exists) throw codedError('CONTACT_EXISTS', '该收款人已存在');
+    const target = phone ? this.getUserByPhone(phone) : null;
+    const accountId = target ? this.accountOf(target.id)?.id ?? null : null;
+    const id = `c_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    this.db
+      .prepare('INSERT INTO contacts (id, user_id, name, alias, phone, tag, account_id) VALUES (?, ?, ?, ?, ?, NULL, ?)')
+      .run(id, userId, name, alias, phone, accountId);
+    return this.db.prepare('SELECT * FROM contacts WHERE id = ?').get(id);
+  }
+
   close() {
     this.db.close();
   }

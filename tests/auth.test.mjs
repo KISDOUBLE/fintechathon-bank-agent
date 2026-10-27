@@ -9,11 +9,17 @@ async function withServer(fn) {
   const server = createServer(app);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const login = (userId, pin) =>
+  const login = (account, pin) =>
     fetch(`${base}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, pin }),
+      body: JSON.stringify(account.startsWith('u_') ? { userId: account, pin } : { phone: account, pin }),
+    });
+  const register = (body) =>
+    fetch(`${base}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
   const chat = (token, body) =>
     fetch(`${base}/api/chat`, {
@@ -21,13 +27,89 @@ async function withServer(fn) {
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body),
     });
+  const me = (token) => fetch(`${base}/api/me`, { headers: { Authorization: `Bearer ${token}` } });
+  const contacts = (token, body) =>
+    fetch(`${base}/api/contacts`, {
+      method: body ? 'POST' : 'GET',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: body ? JSON.stringify(body) : undefined,
+    });
   try {
-    return await fn({ app, base, login, chat });
+    return await fn({ app, base, login, register, chat, me, contacts });
   } finally {
     await new Promise((r) => server.close(r));
     app.db.close();
   }
 }
+
+test('注册成功：发令牌、开户赠礼、可立即查余额', async () => {
+  await withServer(async ({ register, me, chat }) => {
+    const res = await register({ name: '赵六', phone: '13911112222', pin: '654321' });
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.ok(body.token && body.user.id.startsWith('u_'));
+
+    const profile = await me(body.token);
+    assert.equal(profile.status, 200);
+    const p = await profile.json();
+    assert.equal(p.user.name, '赵六');
+    assert.equal(p.balanceCents, 100_000); // ¥1,000 开户演示资金
+
+    const out = await (await chat(body.token, { text: '查一下余额' })).json();
+    assert.equal(out.status, 'ok');
+    assert.match(out.reply, /¥1,000\.00/);
+  });
+});
+
+test('注册校验：手机号重复、格式错、PIN 非 6 位', async () => {
+  await withServer(async ({ register }) => {
+    const dup = await register({ name: '张伟', phone: '13800000001', pin: '123456' });
+    assert.equal(dup.status, 409);
+
+    const badPhone = await register({ name: '测试', phone: '123', pin: '123456' });
+    assert.equal(badPhone.status, 400);
+
+    const badPin = await register({ name: '测试', phone: '13911113333', pin: '12345' });
+    assert.equal(badPin.status, 400);
+
+    const badName = await register({ name: 'x', phone: '13911113333', pin: '123456' });
+    assert.equal(badName.status, 400);
+  });
+});
+
+test('手机号登录可用（与内部 ID 登录等价）', async () => {
+  await withServer(async ({ login }) => {
+    const byPhone = await login('13800000001', '123456');
+    assert.equal(byPhone.status, 200);
+    const byId = await login('u_1001', '123456');
+    assert.equal(byId.status, 200);
+  });
+});
+
+test('收款人：新增、列表、去重；行内手机号自动关联账户', async () => {
+  await withServer(async ({ login, contacts }) => {
+    const { token } = await (await login('u_1001', '123456')).json();
+
+    const add = await contacts(token, { name: '赵六', phone: '13800000002' });
+    assert.equal(add.status, 201);
+    const added = await add.json();
+    assert.equal(added.contact.inBank, true);
+
+    const list = await (await contacts(token)).json();
+    assert.ok(list.contacts.some((c) => c.name === '赵六'));
+
+    const dup = await contacts(token, { name: '赵六', phone: '13800000002' });
+    assert.equal(dup.status, 409);
+  });
+});
+
+test('新用户没有收款人时转账会被追问', async () => {
+  await withServer(async ({ register, chat }) => {
+    const { token } = await (await register({ name: '新人', phone: '13911114444', pin: '123456' })).json();
+    const out = await (await chat(token, { text: '转给王小明 100 元' })).json();
+    assert.equal(out.status, 'clarify');
+  });
+});
 
 test('未携带令牌访问业务接口返回 401', async () => {
   await withServer(async ({ chat }) => {
