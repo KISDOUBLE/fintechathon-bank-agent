@@ -10,7 +10,7 @@
 | 04 | 安全自评报告 | 是 | PDF/DOC/DOCX，50MB | 🟢 已完成 | PDF + DOCX 已生成 |
 | 05 | 演示视频 | 否（选填） | MP4，500MB | ⬜ 不做 | 由团队自行录制 |
 | — | 作品简介 | 是（报名系统） | ≤200 字 | 🟢 草稿已写 | 定稿后粘贴 |
-| — | 仓库链接 | 否 | URL | ❌ 无 | 决定是否建 GitHub |
+| — | 仓库链接 | 否 | URL | 🟢 已推送 | https://github.com/KISDOUBLE/fintechathon-bank-agent |
 
 ## 01 技术文档
 
