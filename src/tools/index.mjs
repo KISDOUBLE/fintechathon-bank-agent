@@ -230,6 +230,330 @@ export function createTools(db) {
         };
       },
     },
+
+    // ---------------- 理财 ----------------
+    {
+      name: 'wealth_list',
+      description: '列出理财产品与当前持仓',
+      reversible: true,
+      validate: (a) => ({ riskMax: Number.isInteger(a.riskMax) ? a.riskMax : 5 }),
+      run: ({ actor, args }) => {
+        const products = db.listProducts()
+          .filter((p) => p.risk_level <= args.riskMax)
+          .map((p) => ({
+            id: p.id,
+            name: p.name,
+            riskLevel: p.risk_level,
+            rateText: `${(p.annual_rate_bp / 100).toFixed(2)}%`,
+            minAmountText: formatCents(p.min_amount_cents),
+            termDays: p.term_days,
+          }));
+        const holdings = db.holdings(actor.id).map((h) => ({
+          holdingId: h.id,
+          productName: h.product_name,
+          amountCents: h.amount_cents,
+          amountText: formatCents(h.amount_cents),
+          status: h.status,
+          since: h.created_at,
+        }));
+        return { products, holdings, activeCount: holdings.filter((h) => h.status === 'active').length };
+      },
+    },
+    {
+      name: 'wealth_recommend',
+      description: '按风险承受能力推荐产品',
+      reversible: true,
+      validate: (a) => ({ riskMax: Number.isInteger(a.riskMax) ? a.riskMax : 2 }),
+      run: ({ args }) => {
+        const list = db.listProducts().filter((p) => p.risk_level <= args.riskMax);
+        if (!list.length) throw codedError('NO_PRODUCT', '没有符合风险等级的产品');
+        return {
+          riskMax: args.riskMax,
+          picks: list.map((p) => ({
+            id: p.id,
+            name: p.name,
+            riskLevel: p.risk_level,
+            rateBp: p.annual_rate_bp,
+            rateText: `${(p.annual_rate_bp / 100).toFixed(2)}%`,
+            minAmountCents: p.min_amount_cents,
+            minAmountText: formatCents(p.min_amount_cents),
+          })),
+        };
+      },
+    },
+    {
+      name: 'wealth_subscribe',
+      description: '申购理财产品',
+      reversible: false,
+      validate: (a) => {
+        const amountCents = assertCents(a.amountCents, '申购金额');
+        const product = String(a.product ?? '').trim();
+        if (!product) throw codedError('INVALID_ARGUMENT', '缺少产品名称');
+        return { amountCents, product };
+      },
+      run: ({ actor, args, traceId }) => {
+        const found = db.findProduct(args.product);
+        if (!found.length) throw codedError('PRODUCT_NOT_FOUND', `没有找到产品「${args.product}」`);
+        const p = found[0];
+        const r = db.subscribeWealth({ userId: actor.id, productId: p.id, amountCents: args.amountCents, traceId });
+        return {
+          holdingId: r.holdingId,
+          productName: p.name,
+          amountText: formatCents(args.amountCents),
+          balanceAfterText: formatCents(r.balanceAfterCents),
+          riskLevel: p.risk_level,
+          rateText: `${(p.annual_rate_bp / 100).toFixed(2)}%`,
+        };
+      },
+    },
+    {
+      name: 'wealth_redeem',
+      description: '赎回理财产品',
+      reversible: false,
+      validate: (a) => ({ holdingId: a.holdingId ? String(a.holdingId) : null, product: a.product ? String(a.product) : null }),
+      run: ({ actor, args, traceId }) => {
+        const active = db.holdings(actor.id).filter((h) => h.status === 'active');
+        if (!active.length) throw codedError('NO_HOLDING', '当前没有可赎回的持仓');
+        const target = args.holdingId
+          ? active.find((h) => h.id === args.holdingId)
+          : active.find((h) => h.product_name.includes(args.product ?? '')) ?? active[0];
+        if (!target) throw codedError('HOLDING_NOT_FOUND', '没有匹配的持仓');
+        const r = db.redeemWealth({ userId: actor.id, holdingId: target.id, traceId });
+        return {
+          productName: r.productName,
+          principalText: formatCents(r.principalCents),
+          interestText: formatCents(r.interestCents),
+          totalText: formatCents(r.totalCents),
+          days: r.days,
+          balanceAfterText: formatCents(r.balanceAfterCents),
+        };
+      },
+    },
+
+    // ---------------- 卡片 ----------------
+    {
+      name: 'card_list',
+      description: '列出本人银行卡状态与额度',
+      reversible: true,
+      validate: () => ({}),
+      run: ({ actor }) => ({
+        count: db.listCards(actor.id).length,
+        cards: db.listCards(actor.id).map((c) => ({
+          id: c.id,
+          brand: c.brand,
+          last4: c.last4,
+          status: c.status,
+          statusText: c.status === 'active' ? '正常' : '已冻结',
+          dailyLimitText: formatCents(c.daily_limit_cents),
+        })),
+      }),
+    },
+    {
+      name: 'card_apply',
+      description: '申请虚拟卡',
+      reversible: false,
+      validate: (a) => ({ brand: String(a.brand ?? '虚拟卡').slice(0, 20) }),
+      run: ({ actor, args }) => {
+        const c = db.applyCard({ userId: actor.id, brand: args.brand });
+        return { cardId: c.id, brand: c.brand, last4: c.last4, dailyLimitText: formatCents(c.daily_limit_cents) };
+      },
+    },
+    {
+      name: 'card_set_limit',
+      description: '调整卡片单日交易限额',
+      reversible: false,
+      validate: (a) => {
+        const limitCents = assertCents(a.limitCents, '限额');
+        return { last4: String(a.last4 ?? ''), limitCents };
+      },
+      run: ({ actor, args }) => {
+        const card = args.last4 ? db.findCard(actor.id, args.last4) : db.listCards(actor.id)[0];
+        if (!card) throw codedError('CARD_NOT_FOUND', `没有尾号 ${args.last4} 的卡`);
+        const r = db.setCardLimit(actor.id, card.id, args.limitCents);
+        return {
+          last4: r.last4,
+          beforeText: formatCents(r.before),
+          afterText: formatCents(r.daily_limit_cents),
+        };
+      },
+    },
+    {
+      name: 'card_freeze',
+      description: '挂失或限制卡片交易',
+      reversible: false,
+      validate: (a) => ({ last4: String(a.last4 ?? ''), mode: a.mode === 'lock' ? 'lock' : 'loss' }),
+      run: ({ actor, args }) => {
+        const card = args.last4 ? db.findCard(actor.id, args.last4) : db.listCards(actor.id)[0];
+        if (!card) throw codedError('CARD_NOT_FOUND', `没有尾号 ${args.last4} 的卡`);
+        const r = db.setCardStatus(actor.id, card.id, 'frozen');
+        return { last4: r.last4, mode: args.mode, modeText: args.mode === 'loss' ? '挂失' : '交易限制', statusText: '已冻结' };
+      },
+    },
+    {
+      name: 'card_unfreeze',
+      description: '解挂或解除交易限制',
+      reversible: false,
+      validate: (a) => ({ last4: String(a.last4 ?? '') }),
+      run: ({ actor, args }) => {
+        const card = args.last4 ? db.findCard(actor.id, args.last4) : db.listCards(actor.id)[0];
+        if (!card) throw codedError('CARD_NOT_FOUND', `没有尾号 ${args.last4} 的卡`);
+        const r = db.setCardStatus(actor.id, card.id, 'active');
+        return { last4: r.last4, statusText: '已恢复正常' };
+      },
+    },
+
+    // ---------------- 定时转账 / 平摊 ----------------
+    {
+      name: 'transfer_schedule_create',
+      description: '创建定时转账',
+      reversible: false,
+      validate: (a) => ({
+        payee: String(a.payee ?? '').trim(),
+        amountCents: assertCents(a.amountCents, '定时转账金额'),
+        runAt: String(a.runAt ?? ''),
+      }),
+      run: ({ actor, args }) => {
+        if (!args.runAt) throw codedError('INVALID_ARGUMENT', '缺少执行时间');
+        const contact = db.findContact(actor.id, args.payee)[0];
+        if (!contact) throw codedError('PAYEE_NOT_FOUND', `通讯录里没有「${args.payee}」`);
+        const row = db.scheduleTransfer({
+          userId: actor.id,
+          payeeName: contact.name,
+          payeeAccount: contact.account_id ?? SUSPENSE_ACCOUNT,
+          amountCents: args.amountCents,
+          runAt: args.runAt,
+        });
+        return { id: row.id, payeeName: row.payee_name, amountText: formatCents(row.amount_cents), runAt: row.run_at };
+      },
+    },
+    {
+      name: 'transfer_schedule_list',
+      description: '列出待执行的定时转账',
+      reversible: true,
+      validate: () => ({}),
+      run: ({ actor }) => ({
+        count: db.listScheduled(actor.id).length,
+        items: db.listScheduled(actor.id).map((r) => ({
+          id: r.id,
+          payeeName: r.payee_name,
+          amountText: formatCents(r.amount_cents),
+          runAt: r.run_at,
+        })),
+      }),
+    },
+    {
+      name: 'transfer_schedule_cancel',
+      description: '取消定时转账',
+      reversible: false,
+      validate: (a) => ({ id: String(a.id ?? '') }),
+      run: ({ actor, args }) => {
+        const ids = db.listScheduled(actor.id).map((x) => x.id);
+        const id = ids.includes(args.id) ? args.id : ids[0];
+        if (!id) throw codedError('SCHEDULE_NOT_FOUND', '没有可取消的定时转账');
+        const r = db.cancelScheduled(actor.id, id);
+        return { id: r.id, payeeName: r.payee_name, amountText: formatCents(r.amount_cents), status: r.status };
+      },
+    },
+    {
+      name: 'transfer_split',
+      description: '把总金额平摊给多个收款人（AA 分摊）',
+      reversible: false,
+      validate: (a) => {
+        const totalCents = assertCents(a.totalCents, '分摊总额');
+        const payees = (Array.isArray(a.payees) ? a.payees : []).map((s) => String(s).trim()).filter(Boolean);
+        if (payees.length < 2) throw codedError('INVALID_ARGUMENT', '至少需要两个收款人');
+        return { totalCents, payees, memo: String(a.memo ?? 'AA 分摊').slice(0, 40) };
+      },
+      run: ({ actor, args, traceId }) => {
+        const per = Math.floor(args.totalCents / args.payees.length);
+        const remainder = args.totalCents - per * args.payees.length;
+        const done = [];
+        args.payees.forEach((name, i) => {
+          const amount = i === 0 ? per + remainder : per;
+          const contact = db.findContact(actor.id, name)[0];
+          if (!contact) throw codedError('PAYEE_NOT_FOUND', `通讯录里没有「${name}」`);
+          const txn = db.transfer({
+            traceId,
+            fromUserId: actor.id,
+            toAccountId: contact.account_id ?? SUSPENSE_ACCOUNT,
+            amountCents: amount,
+            memo: args.memo,
+            merchant: contact.name,
+            category: '转账',
+            idempotencyKey: `split-${i}`,
+          });
+          done.push({ payeeName: contact.name, amountText: formatCents(amount), txnId: txn.id });
+        });
+        return {
+          totalText: formatCents(args.totalCents),
+          count: done.length,
+          items: done,
+          balanceAfterText: formatCents(db.accountOf(actor.id).balance_cents),
+        };
+      },
+    },
+
+    // ---------------- 订阅识别 ----------------
+    {
+      name: 'subscription_detect',
+      description: '从历史流水识别疑似周期性扣费',
+      reversible: true,
+      validate: (a) => ({ days: Number.isInteger(a.days) ? a.days : 90 }),
+      run: ({ actor, args }) => {
+        const found = db.detectRecurring(actor.id, args.days);
+        return {
+          days: args.days,
+          count: found.length,
+          items: found.map((x) => ({
+            merchant: x.merchant,
+            count: x.count,
+            avgText: formatCents(x.avgCents),
+            lastAt: x.lastAt,
+          })),
+        };
+      },
+    },
+
+    // ---------------- 跨场景联动 ----------------
+    {
+      name: 'birthday_setup',
+      description: '生日联动：锁定预算并提前预订鲜花蛋糕',
+      reversible: false,
+      validate: (a) => ({
+        person: String(a.person ?? '家人').slice(0, 20),
+        date: String(a.date ?? ''),
+        budgetCents: assertCents(a.budgetCents, '预算'),
+      }),
+      run: ({ actor, args, traceId }) => {
+        if (!/^\d{4}-\d{2}-\d{2}/.test(args.date)) throw codedError('INVALID_ARGUMENT', '日期格式应为 YYYY-MM-DD');
+        const r = db.createEvent({ userId: actor.id, person: args.person, eventDate: args.date, budgetCents: args.budgetCents, traceId });
+        return {
+          eventId: r.event.id,
+          person: r.event.person,
+          date: r.event.event_date,
+          budgetText: formatCents(r.event.budget_cents),
+          orders: r.orders.map((o) => ({ item: o.item, vendor: o.vendor, amountText: formatCents(o.amount_cents), at: o.scheduled_at })),
+          balanceAfterText: formatCents(r.balanceAfterCents),
+        };
+      },
+    },
+    {
+      name: 'event_list',
+      description: '列出已安排的跨场景事件',
+      reversible: true,
+      validate: () => ({}),
+      run: ({ actor }) => ({
+        count: db.listEvents(actor.id).length,
+        items: db.listEvents(actor.id).map((e) => ({
+          id: e.id,
+          person: e.person,
+          date: e.event_date,
+          budgetText: formatCents(e.budget_cents),
+          status: e.status,
+          orders: db.listOrders(e.id).map((o) => ({ item: o.item, at: o.scheduled_at, status: o.status })),
+        })),
+      }),
+    },
   ];
 }
 

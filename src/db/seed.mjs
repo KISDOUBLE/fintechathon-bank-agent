@@ -46,16 +46,18 @@ export function seed(db) {
     ['acc_1001', 5_230_000],
     ['acc_1002', 1_880_000],
     ['acc_1003', 640_000],
+    ['SYS_YIELD', 10_000_000],
   ];
+  const openingTotal = opening.reduce((s, [, v]) => s + v, 0);
   const hasOpening = db.db.prepare("SELECT COUNT(*) n FROM transactions WHERE id = 'txn_opening'").get().n;
   if (!hasOpening) {
     db.tx(() => {
       db.db
         .prepare(
           `INSERT INTO transactions (id, trace_id, type, status, amount_cents, from_account, to_account, memo, category, created_at)
-           VALUES ('txn_opening','seed','topup','committed',?,?,?,?,'开户','${now}')`,
+           VALUES ('txn_opening','seed','topup','committed',?,?,?,?,'开户',?)`,
         )
-        .run(7_750_000, EQUITY_ACCOUNT, 'acc_1001', '种子开户资金');
+        .run(openingTotal, EQUITY_ACCOUNT, 'acc_1001', '种子开户资金', now);
       for (const [acct, amt] of opening) {
         insEntry.run('txn_opening', acct, amt, now);
         insEntry.run('txn_opening', EQUITY_ACCOUNT, -amt, now);
@@ -133,5 +135,20 @@ export function seed(db) {
   insSub.run('sub_2', 'u_1001', '云音乐黑胶', 1_500, daysAgo(-9), daysAgo(21));
   insSub.run('sub_3', 'u_1001', '云盘 2TB', 900, daysAgo(-15), daysAgo(15));
 
-  return { users: users.length, payments: payments.length, subscriptions: 3 };
+  // 理财产品
+  const insProd = db.db.prepare(
+    'INSERT OR IGNORE INTO products (id, name, risk_level, annual_rate_bp, min_amount_cents, term_days) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  insProd.run('p1', '稳健货币A', 1, 180, 10_000, 0);
+  insProd.run('p2', '稳健债券180天', 2, 260, 100_000, 180);
+  insProd.run('p3', '平衡混合一年', 3, 340, 500_000, 365);
+  insProd.run('p4', '指数增强一年', 4, 450, 1_000_000, 365);
+
+  // 银行卡
+  const insCard = db.db.prepare(
+    'INSERT OR IGNORE INTO cards (id, user_id, brand, last4, credit_limit_cents, daily_limit_cents, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  insCard.run('card_1001', 'u_1001', '储蓄卡', '8899', 5_000_000, 2_000_000, 'active');
+
+  return { users: users.length, payments: payments.length, subscriptions: 3, products: 4, cards: 1 };
 }

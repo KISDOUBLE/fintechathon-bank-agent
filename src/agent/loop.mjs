@@ -17,6 +17,16 @@ const FAIL_LIMIT = 3; // 连续失败 3 次触发熔断
 const FAIL_WINDOW_MS = 10 * 60 * 1000;
 const LOCK_MS = 5 * 60 * 1000;
 
+const CAPABILITY_MENU =
+  '我能办这些：\n' +
+  '· 转账：人名/手机号、定时、AA 平摊\n' +
+  '· 账单：分类统计、异常识别\n' +
+  '· 理财：产品对比、申购、赎回\n' +
+  '· 卡片：申请、额度、冻结、挂失\n' +
+  '· 订阅：识别、提醒、取消\n' +
+  '· 跨场景：生日安排\n' +
+  '可以直接说一句，例如「转给王小明 500 元」或「我有哪些理财」。';
+
 export class BankAgent {
   constructor({ db, audit, registry, llm = null }) {
     this.db = db;
@@ -127,6 +137,19 @@ export class BankAgent {
     const session = this.sessions.get(userId) ?? {};
     this.sessions.set(userId, session);
 
+    // 应变：用户随时可以说“算了”。必须整句匹配，避免把“取消某某订阅”也当成放弃
+    if (/^(算了|取消|不用了|不办了|停下|停一下)[吧了啊。！!]*$/.test(guard.normalized)) {
+      const had = Boolean(session.pendingConfirm);
+      session.pendingConfirm = null;
+      session.pendingParse = null;
+      return this.finalize(traceId2, {
+        status: 'ok',
+        level: LEVEL.GREEN,
+        reply: had ? '已取消，本次没有执行任何资金操作。' : '好的，需要时再叫我。',
+        rules: [],
+      });
+    }
+
     // 2) 解析
     const parsed = await this.parseIntent(guard.normalized, session);
     this.audit.append({
@@ -142,6 +165,15 @@ export class BankAgent {
         level: LEVEL.YELLOW,
         reply: parsed.explain,
         rules: [{ rule: 'POLICY-MEMO-TRANSFER', detail: parsed.explain }],
+      });
+    }
+
+    if (parsed.intent === INTENT.UNKNOWN) {
+      return this.finalize(traceId2, {
+        status: 'clarify',
+        level: LEVEL.GREEN,
+        reply: CAPABILITY_MENU,
+        rules: [],
       });
     }
 
@@ -168,7 +200,15 @@ export class BankAgent {
       return this.finalize(traceId2, {
         status: 'clarify',
         level: LEVEL.GREEN,
-        reply: '这个请求我还处理不了，已记录。可以试试“查余额”“分析本月账单”“转给王小明 500 元”。',
+        reply:
+          '这句我还没理解，但我能办这些：\n' +
+          '· 转账：人名/手机号、定时、AA 平摊\n' +
+          '· 账单：分类统计、异常识别\n' +
+          '· 理财：产品对比、申购、赎回\n' +
+          '· 卡片：申请、额度、冻结、挂失\n' +
+          '· 订阅：识别、提醒、取消\n' +
+          '· 跨场景：生日安排\n' +
+          '可以直接说一句，例如「转给王小明 500 元」或「我有哪些理财」。',
         rules: [],
       });
     }
@@ -239,7 +279,7 @@ export class BankAgent {
       dailySpentCents: pending.dailySpentCents,
     });
 
-    return this.respondFromTool(traceId2, userId, pending.parsed, pending.plan, result, pending.risk, pending.authz);
+    return this.respondFromTool(traceId2, userId, pending.parsed, pending.plan, result, pending.risk, pending.authz, pending.shownLevel);
   }
 
   cancel({ userId, traceId }) {
@@ -306,6 +346,38 @@ export class BankAgent {
         return { kind: 'batch', tool: 'subscription_cancel', stepId: 'batch' };
       case INTENT.SUB_CANCEL:
         return { tool: 'subscription_cancel', args: { subscriptionId: s.subscriptionId ?? s.merchant ?? '' }, stepId: 's1' };
+      case INTENT.SUB_DETECT:
+        return { tool: 'subscription_detect', args: { days: 90 }, stepId: 's1' };
+      case INTENT.WEALTH_LIST:
+        return { tool: 'wealth_list', args: {}, stepId: 's1' };
+      case INTENT.WEALTH_RECOMMEND:
+        return { tool: 'wealth_recommend', args: { riskMax: s.riskMax ?? 2 }, stepId: 's1' };
+      case INTENT.WEALTH_BUY:
+        return { tool: 'wealth_subscribe', args: { product: s.product, amountCents: s.amountCents }, stepId: 's1' };
+      case INTENT.WEALTH_REDEEM:
+        return { tool: 'wealth_redeem', args: { product: s.product || null }, stepId: 's1' };
+      case INTENT.CARD_LIST:
+        return { tool: 'card_list', args: {}, stepId: 's1' };
+      case INTENT.CARD_APPLY:
+        return { tool: 'card_apply', args: { brand: '虚拟卡' }, stepId: 's1' };
+      case INTENT.CARD_LIMIT:
+        return { tool: 'card_set_limit', args: { last4: s.last4, limitCents: s.limitCents }, stepId: 's1' };
+      case INTENT.CARD_FREEZE:
+        return { tool: 'card_freeze', args: { last4: s.last4, mode: s.mode ?? 'loss' }, stepId: 's1' };
+      case INTENT.CARD_UNFREEZE:
+        return { tool: 'card_unfreeze', args: { last4: s.last4 }, stepId: 's1' };
+      case INTENT.TRANSFER_SCHEDULE:
+        return { tool: 'transfer_schedule_create', args: { payee: s.payee, amountCents: s.amountCents, runAt: s.runAt }, stepId: 's1' };
+      case INTENT.SCHEDULE_LIST:
+        return { tool: 'transfer_schedule_list', args: {}, stepId: 's1' };
+      case INTENT.SCHEDULE_CANCEL:
+        return { tool: 'transfer_schedule_cancel', args: { id: '' }, stepId: 's1' };
+      case INTENT.TRANSFER_SPLIT:
+        return { tool: 'transfer_split', args: { payees: s.payees, totalCents: s.totalCents }, stepId: 's1' };
+      case INTENT.BIRTHDAY:
+        return { tool: 'birthday_setup', args: { person: s.person, date: s.date, budgetCents: s.budgetCents }, stepId: 's1' };
+      case INTENT.EVENT_LIST:
+        return { tool: 'event_list', args: {}, stepId: 's1' };
       case INTENT.TRANSFER:
         return { tool: 'transfer_create', args: { payee: s.payee, amountCents: s.amountCents, memo: s.memo ?? '' }, stepId: 's1' };
       default:
@@ -321,6 +393,9 @@ export class BankAgent {
     let payeeAccountId = null;
     let payeeLabel = args.payee;
     if (plan.tool === 'transfer_create') {
+      if (!args.payee) {
+        return this.finalize(traceId, { status: 'clarify', level: LEVEL.GREEN, reply: CAPABILITY_MENU, rules: [] });
+      }
       const matches = this.db.findContact(userId, args.payee ?? '');
       const exact = matches.find((m) => m.name === args.payee || m.alias === args.payee || m.phone === args.payee) ?? (matches.length === 1 ? matches[0] : null);
       if (!exact) {
@@ -335,7 +410,9 @@ export class BankAgent {
         return this.finalize(traceId, {
           status: 'clarify',
           level: LEVEL.GREEN,
-          reply: `通讯录里没有「${args.payee}」。为了防诈骗，只能转给已存在的收款人；请先在通讯录添加，或换个名字。`,
+          reply: /(贷|款|费|账|单)$/.test(String(args.payee ?? ''))
+            ? `「${args.payee}」不是收款人，这类业务我暂不支持。\n${CAPABILITY_MENU}`
+            : `通讯录里没有「${args.payee}」。为了防诈骗，只能转给已存在的收款人；请先在通讯录添加，或换个名字。`,
           rules: [{ rule: 'PAYEE-NOT-FOUND', detail: `未匹配到收款人「${args.payee}」` }],
         });
       }
@@ -430,6 +507,13 @@ export class BankAgent {
       });
     }
 
+    // 颜色显示与执行策略一致：需要多因子 → 红；需要确认 → 黄；否则取风险色
+    const shownLevel = authz.needMfa
+      ? LEVEL.RED
+      : authz.needConfirm
+        ? (risk.level === LEVEL.RED ? LEVEL.RED : LEVEL.YELLOW)
+        : risk.level;
+
     // 无需确认：直接执行（L0/L1）
     if (!authz.needConfirm) {
       const result = this.registry.execute(plan.tool, args, {
@@ -457,6 +541,7 @@ export class BankAgent {
       mfaCode: authz.needMfa ? String(randomInt(100000, 1000000)) : null,
       expiresAt: Date.now() + CONFIRM_TTL_MS,
       attempts: 0,
+      shownLevel,
     };
     session.pendingConfirm = pending;
 
@@ -469,7 +554,7 @@ export class BankAgent {
 
     return this.finalize(traceId, {
       status: 'need_confirm',
-      level: risk.level,
+      level: shownLevel,
       reply: this.confirmReply(pending),
       rules: risk.hits.map((h) => ({ rule: h.rule, detail: h.detail })),
       risk,
@@ -611,7 +696,8 @@ export class BankAgent {
     });
   }
 
-  respondFromTool(traceId, userId, parsed, plan, result, risk, authz) {
+  respondFromTool(traceId, userId, parsed, plan, result, risk, authz, shownLevel = null) {
+    const level = shownLevel ?? risk.level;
     if (!result.ok) {
       this.recordFailure(userId, `tool.${result.code ?? 'error'}`);
       return this.finalize(traceId, {
@@ -627,7 +713,7 @@ export class BankAgent {
     this.audit.append({ traceId, actor: userId, event: 'reply.sent', detail: { tool: plan.tool, level: risk.level } });
     return this.finalize(traceId, {
       status: 'ok',
-      level: risk.level,
+      level,
       reply,
       rules: risk.hits.map((h) => ({ rule: h.rule, detail: h.detail })),
       risk,
@@ -689,6 +775,10 @@ export class BankAgent {
     if (missing.includes('payee') && missing.includes('amount')) return '请补充收款人和金额，例如：转给王小明 500 元。';
     if (missing.includes('payee')) return '请告诉我要转给谁（通讯录里的姓名或手机号）。';
     if (missing.includes('amount')) return '请补充金额，例如 500 元。';
+    if (missing.includes('budget')) return '请告诉我生日预算，例如 1000 元。';
+    if (missing.includes('date')) return '请告诉我具体日期，例如“11 月 20 日”。';
+    if (missing.includes('payees')) return '请告诉我要平摊给谁，例如“和小王、李娜平摊 300 元”。';
+    if (missing.includes('limit')) return '请告诉我要调整到的额度，例如“把尾号 8899 的日限额调到 5000 元”。';
     if (missing.includes('subscriptionId')) return '请告诉我要取消哪一项订阅，例如“取消某某视频会员”。';
     return '我没太理解，可以换个说法吗？';
   }
@@ -729,6 +819,54 @@ export class BankAgent {
       }
       case 'subscription_cancel':
         return `${data.alreadyCancelled ? '该订阅此前已取消' : '已取消'}：${data.merchant}（${data.amountText}）。\n${head}`;
+      case 'subscription_detect': {
+        if (!data.count) return `近 ${data.days} 天没有识别到周期性扣费。\n${head}`;
+        const list = data.items.map((i) => `${i.merchant}（${i.count} 次，均值 ${i.avgText}）`).join('；');
+        return `近 ${data.days} 天发现 ${data.count} 项疑似订阅：${list}。\n${head}`;
+      }
+      case 'wealth_list': {
+        const top = data.products.slice(0, 4).map((p) => `${p.name}（${p.rateText}，风险 R${p.riskLevel}）`).join('；');
+        return `在售产品 ${data.products.length} 只：${top}。当前持仓 ${data.activeCount} 笔。\n${head}`;
+      }
+      case 'wealth_recommend': {
+        const picks = data.picks.map((p) => `${p.name} ${p.rateText}（R${p.riskLevel}，起购 ${p.minAmountText}）`).join('；');
+        return `按风险不高于 R${data.riskMax} 筛选：${picks}。\n${head}`;
+      }
+      case 'wealth_subscribe':
+        return `已申购 ${data.productName} ${data.amountText}（${data.rateText}，风险 R${data.riskLevel}），当前余额 ${data.balanceAfterText}。\n${head}`;
+      case 'wealth_redeem':
+        return `已赎回 ${data.productName}：本金 ${data.principalText}，持有 ${data.days} 天收益 ${data.interestText}，到账 ${data.totalText}，余额 ${data.balanceAfterText}。\n${head}`;
+      case 'card_list': {
+        if (!data.count) return `你还没有卡片，可以申请一张虚拟卡。\n${head}`;
+        const list = data.cards.map((c) => `${c.brand} 尾号${c.last4}（${c.statusText}，日限额 ${c.dailyLimitText}）`).join('；');
+        return `你有 ${data.count} 张卡：${list}。\n${head}`;
+      }
+      case 'card_apply':
+        return `已为你开通${data.brand}，尾号 ${data.last4}，日限额 ${data.dailyLimitText}。\n${head}`;
+      case 'card_set_limit':
+        return `尾号 ${data.last4} 的日限额已从 ${data.beforeText} 调整为 ${data.afterText}。\n${head}`;
+      case 'card_freeze':
+        return `已对尾号 ${data.last4} 执行${data.modeText}，当前状态：${data.statusText}。\n${head}`;
+      case 'card_unfreeze':
+        return `尾号 ${data.last4} 已${data.statusText}。\n${head}`;
+      case 'transfer_schedule_create':
+        return `已创建定时转账：${data.runAt.slice(0, 10)} 向 ${data.payeeName} 转 ${data.amountText}。\n${head}`;
+      case 'transfer_schedule_list': {
+        if (!data.count) return `当前没有待执行的定时转账。\n${head}`;
+        return `待执行 ${data.count} 笔：${data.items.map((i) => `${i.runAt.slice(0, 10)} 给 ${i.payeeName} ${i.amountText}`).join('；')}。\n${head}`;
+      }
+      case 'transfer_schedule_cancel':
+        return `已取消定时转账：${data.payeeName} ${data.amountText}。\n${head}`;
+      case 'transfer_split':
+        return `已平摊 ${data.totalText} 给 ${data.count} 人：${data.items.map((i) => `${i.payeeName} ${i.amountText}`).join('；')}。余额 ${data.balanceAfterText}。\n${head}`;
+      case 'birthday_setup': {
+        const orders = data.orders.map((o) => `${o.item}（${o.vendor} ${o.amountText}，${o.at.slice(0, 10)}）`).join('；');
+        return `已为${data.person}安排 ${data.date} 的生日：锁定预算 ${data.budgetText}，预订 ${orders}。余额 ${data.balanceAfterText}。\n${head}`;
+      }
+      case 'event_list': {
+        if (!data.count) return `当前没有已安排的跨场景事件。\n${head}`;
+        return `已安排 ${data.count} 个事件：${data.items.map((e) => `${e.date} ${e.person}生日（预算 ${e.budgetText}，${e.orders.length} 个预订）`).join('；')}。\n${head}`;
+      }
       case 'transfer_create':
         return `已向${data.payeeName}（${data.payeeMasked ?? '外部账户'}）转账 ${data.amountText}${data.memo ? `，备注「${data.memo}」` : ''}。\n交易号 ${data.txnId}，当前余额 ${data.balanceAfterText}。\n${head}`;
       default:
@@ -738,11 +876,33 @@ export class BankAgent {
 }
 
 function summarize(plan) {
-  if (plan.tool === 'transfer_create') {
-    return `转账 ${formatCents(plan.args.amountCents ?? 0)} 给 ${plan.args.payee}${plan.args.memo ? `（备注：${plan.args.memo}）` : ''}`;
+  const a = plan.args ?? {};
+  switch (plan.tool) {
+    case 'transfer_create':
+      return `转账 ${formatCents(a.amountCents ?? 0)} 给 ${a.payee}${a.memo ? `（备注：${a.memo}）` : ''}`;
+    case 'subscription_cancel':
+      return `取消订阅 ${a.subscriptionId}`;
+    case 'wealth_subscribe':
+      return `申购 ${a.product} ${formatCents(a.amountCents ?? 0)}`;
+    case 'wealth_redeem':
+      return `赎回 ${a.product || '最近一笔持仓'}`;
+    case 'card_apply':
+      return '申请一张虚拟卡';
+    case 'card_set_limit':
+      return `把尾号 ${a.last4} 的日限额调整为 ${formatCents(a.limitCents ?? 0)}`;
+    case 'card_freeze':
+      return `对尾号 ${a.last4} 执行${a.mode === 'lock' ? '交易限制' : '挂失'}`;
+    case 'card_unfreeze':
+      return `解除尾号 ${a.last4} 的限制`;
+    case 'transfer_schedule_create':
+      return `定时转账 ${formatCents(a.amountCents ?? 0)} 给 ${a.payee}，执行时间 ${String(a.runAt ?? '').slice(0, 10)}`;
+    case 'transfer_split':
+      return `平摊 ${formatCents(a.totalCents ?? 0)} 给 ${(a.payees ?? []).length} 人`;
+    case 'birthday_setup':
+      return `为${a.person}安排 ${String(a.date ?? '').slice(0, 10)} 生日，锁定预算 ${formatCents(a.budgetCents ?? 0)}`;
+    default:
+      return `执行 ${plan.tool}`;
   }
-  if (plan.tool === 'subscription_cancel') return `取消订阅 ${plan.args.subscriptionId}`;
-  return `执行 ${plan.tool}`;
 }
 
 function levelName(level) {

@@ -1,6 +1,6 @@
-{
+﻿{
   "name": "fintechathon-bank-agent",
-  "version": "0.3.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "2026 FinTechathon 银行 AI 智能体：确定性权限与风控内核 + LLM 意图规划层",

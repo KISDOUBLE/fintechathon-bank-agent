@@ -25,15 +25,18 @@
 
 | 要求 | 实现 | 代码位置 |
 | :--- | :--- | :--- |
-| 智能转账 | 姓名/别名/手机号收款、口语金额、多轮补金额、大额多因子 | `src/tools/index.mjs` `transfer_create` |
+| 智能转账 | 姓名/别名/手机号收款、口语金额、多轮补金额、定时转账、AA 平摊 | `transfer_create` / `transfer_schedule_*` / `transfer_split` |
 | 账单分析 | 分类汇总、占比、Top 商户、异常交易 | `bill_analyze` |
-| 订阅代扣 | 列表、到期提醒、单条取消、批量取消 | `subscription_*` |
+| 理财操作 | 产品列表、按风险推荐、申购、赎回（按天计息） | `wealth_*` |
+| 卡片管理 | 列表、虚拟卡申请、日限额、交易限制/解锁、挂失/解挂 | `card_*` |
+| 订阅代扣 | 列表、到期提醒、单条/批量取消、流水识别周期扣费 | `subscription_*` |
+| 跨场景联动 | 生日：锁定预算、提前 2 天预订鲜花蛋糕、安排查询 | `birthday_setup` / `event_list` |
 | 意图理解与规划 | 规则解析 + 模型兜底；多步计划（列目标→逐条判定→确认→执行） | `src/agent/parser.mjs`、`loop.mjs` |
-| 权限分级 | L0–L3 + X，金额与新设备自动抬升 | `src/core/permissions.mjs` |
-| 安全机制 | 注入防御、幻觉防护、审计哈希链、确认令牌、身份令牌 | `src/core/guard.mjs`、`audit.mjs`、`src/auth/session.mjs` |
+| 权限分级 | L0–L3 + X，红色判定自动抬到强验证 | `src/core/permissions.mjs` |
+| 安全机制 | 注入防御、幻觉防护、审计哈希链、确认令牌、身份令牌、熔断 | `src/core/guard.mjs`、`audit.mjs`、`src/auth/session.mjs` |
 | 渠道 | Web 页面 + webhook JSON | `src/server.mjs`、`src/channels/webhook.mjs` |
 
-未覆盖：理财申购、卡片管理、定时转账、跨场景联动。理由见第 7 节。
+六个场景全部覆盖。按备注转账是**策略性拒绝**：备注可伪造，不能作为身份依据。真实 MFA、手机号验证、HTTPS 仍未实现，见第 7 节。
 
 ## 3 架构
 
@@ -164,15 +167,15 @@
 
 | 项目 | 命令 | 结果 |
 | :--- | :--- | :--- |
-| 单元测试 | `npm test` | 75/75 |
+| 单元测试 | `npm test` | 87/87 |
 | 离线冒烟 | `node scripts/smoke.mjs` | 7/7 |
-| 端到端评测（离线） | `node eval/run.mjs` | 52/52 |
-| 端到端评测（含模型） | `node eval/run.mjs --llm` | 62/62 |
+| 端到端评测（离线） | `node eval/run.mjs` | 59/59 |
+| 端到端评测（含模型） | `node eval/run.mjs --llm` | 69/69 |
 | 真实模型联调 | `node scripts/llm-test.mjs` | 3/3 |
 
 评测口径是**三步全对**：状态/颜色/规则对、参数对、终态数据库对。
 
-分组：功能 22、红队 18、交互 12；模型改写句 10。
+分组：功能 28、红队 18、交互 13；模型改写句 10。
 
 说明：用例为自建，100% 只代表"已想到的坑没踩到"，不代表覆盖真实评委用例。
 

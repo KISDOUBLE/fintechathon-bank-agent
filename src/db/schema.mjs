@@ -76,6 +76,61 @@ CREATE TABLE IF NOT EXISTS audit_log (
   prev_hash   TEXT NOT NULL,
   hash        TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS products (
+  id               TEXT PRIMARY KEY,
+  name             TEXT NOT NULL,
+  risk_level       INTEGER NOT NULL CHECK (risk_level BETWEEN 1 AND 5),
+  annual_rate_bp   INTEGER NOT NULL,
+  min_amount_cents INTEGER NOT NULL,
+  term_days        INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS holdings (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  product_id  TEXT NOT NULL REFERENCES products(id),
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  status      TEXT NOT NULL CHECK (status IN ('active','redeemed')),
+  created_at  TEXT NOT NULL,
+  redeemed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS cards (
+  id                 TEXT PRIMARY KEY,
+  user_id            TEXT NOT NULL REFERENCES users(id),
+  brand              TEXT NOT NULL,
+  last4              TEXT NOT NULL,
+  credit_limit_cents INTEGER NOT NULL,
+  daily_limit_cents  INTEGER NOT NULL,
+  status             TEXT NOT NULL CHECK (status IN ('active','frozen'))
+);
+CREATE TABLE IF NOT EXISTS events (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id),
+  kind         TEXT NOT NULL,
+  person       TEXT NOT NULL,
+  event_date   TEXT NOT NULL,
+  budget_cents INTEGER NOT NULL CHECK (budget_cents > 0),
+  status       TEXT NOT NULL CHECK (status IN ('scheduled','cancelled','done')),
+  created_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS orders (
+  id           TEXT PRIMARY KEY,
+  event_id     TEXT NOT NULL REFERENCES events(id),
+  vendor       TEXT NOT NULL,
+  item         TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  scheduled_at TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('scheduled','placed','cancelled'))
+);
+CREATE TABLE IF NOT EXISTS scheduled_transfers (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id),
+  payee_name   TEXT NOT NULL,
+  payee_account TEXT,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  run_at       TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('scheduled','executed','cancelled')),
+  created_at   TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_txn_from ON transactions(from_account, created_at);
 CREATE INDEX IF NOT EXISTS idx_txn_to ON transactions(to_account, created_at);
 CREATE INDEX IF NOT EXISTS idx_entries_txn ON entries(txn_id);
@@ -83,3 +138,6 @@ CREATE INDEX IF NOT EXISTS idx_entries_txn ON entries(txn_id);
 
 export const SUSPENSE_ACCOUNT = 'EXT_SUSPENSE';
 export const EQUITY_ACCOUNT = 'SYS_EQUITY';
+export const WEALTH_POOL = 'SYS_WEALTH_POOL';
+export const RESERVE_ACCOUNT = 'SYS_RESERVE';
+export const YIELD_ACCOUNT = 'SYS_YIELD';
