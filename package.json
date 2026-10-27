@@ -1,19 +1,20 @@
-﻿{
+{
   "name": "fintechathon-bank-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "2026 FinTechathon 閾惰 AI 鏅鸿兘浣擄細纭畾鎬ф潈闄愪笌椋庢帶鍐呮牳 + LLM 鎰忓浘瑙勫垝灞?,
+  "description": "2026 FinTechathon 银行 AI 智能体：确定性权限与风控内核 + LLM 意图规划层",
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
     "start": "node src/server.mjs",
     "webhook": "node src/channels/webhook.mjs",
-    "test": "node --test tests/",
+    "test": "node --test --test-isolation=none tests/*.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "ci": "node scripts/ci.mjs",
-    "seed": "node scripts/seed.mjs"
+    "seed": "node scripts/seed.mjs",
+    "reset": "node scripts/reset.mjs",
+    "llm-test": "node scripts/llm-test.mjs"
   }
 }
-
