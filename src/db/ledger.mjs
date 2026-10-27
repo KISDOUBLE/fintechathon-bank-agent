@@ -9,6 +9,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { SCHEMA_SQL, SUSPENSE_ACCOUNT, EQUITY_ACCOUNT } from './schema.mjs';
 import { assertCents } from '../core/money.mjs';
+import { hashPin, verifyPin } from '../auth/session.mjs';
 
 const iso = (d = new Date()) => d.toISOString();
 
@@ -17,6 +18,33 @@ export class BankDB {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(SCHEMA_SQL);
+    this.migrate();
+  }
+
+  /** 轻量迁移：老库缺列时补上，避免必须删库 */
+  migrate() {
+    const cols = this.db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+    if (!cols.includes('pin_hash')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN pin_salt TEXT');
+      this.db.exec('ALTER TABLE users ADD COLUMN pin_hash TEXT');
+    }
+    const ccols = this.db.prepare('PRAGMA table_info(contacts)').all().map((c) => c.name);
+    if (!ccols.includes('alias')) {
+      this.db.exec('ALTER TABLE contacts ADD COLUMN alias TEXT');
+    }
+  }
+
+  /** 设置登录 PIN（只存 scrypt 派生值，不存明文） */
+  setUserPin(userId, pin) {
+    const { salt, hash } = hashPin(pin);
+    this.db.prepare('UPDATE users SET pin_salt = ?, pin_hash = ? WHERE id = ?').run(salt, hash, userId);
+  }
+
+  /** 校验 PIN；返回用户行或 null */
+  authenticatePin(userId, pin) {
+    const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!row || row.locked) return null;
+    return verifyPin(pin, row.pin_salt, row.pin_hash) ? row : null;
   }
 
   close() {

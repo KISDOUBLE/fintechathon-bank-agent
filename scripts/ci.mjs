@@ -91,6 +91,20 @@ step('金额精度扫描：禁止浮点金额运算', () => {
   console.log(hits === 0 ? '  ✔ 未使用 parseFloat' : `  ✖ ${hits} 处`);
 });
 
+step('文本编码检查', () => {
+  const mojibake = /[\uFFFD]|锛|鐨|鏅|閾|鍚|涓婅堪/;
+  const self = join(root, 'scripts', 'ci.mjs');
+  let hits = 0;
+  for (const f of files.filter((x) => x !== self && !x.endsWith('report.json'))) {
+    const text = readFileSync(f, 'utf8');
+    if (mojibake.test(text)) {
+      hits += 1;
+      problems.push(`疑似乱码 @ ${f.replace(root, '')}`);
+    }
+  }
+  console.log(hits === 0 ? `  ✔ ${files.length} 个文本文件编码正常` : `  ✖ ${hits} 个文件疑似乱码`);
+});
+
 step('单元测试', () => {
   const r = spawnSync(NODE, ['--test', '--test-isolation=none', 'tests/*.test.mjs'], {
     cwd: root.replace(/^\/([A-Za-z]:)/, '$1'),

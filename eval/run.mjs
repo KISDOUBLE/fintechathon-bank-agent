@@ -27,16 +27,26 @@ async function withServer(fn) {
   const server = createServer(app);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+
+  // 先登录拿身份令牌，后续所有业务请求都带上
+  const loginRes = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: 'u_1001', pin: '123456' }),
+  });
+  if (!loginRes.ok) throw new Error(`登录失败 HTTP ${loginRes.status}`);
+  const { token } = await loginRes.json();
+
   const post = async (path, body) => {
     const res = await fetch(base + path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
     return { status: res.status, json: await res.json() };
   };
   try {
-    return await fn({ app, post, base });
+    return await fn({ app, post, base, token });
   } finally {
     await new Promise((r) => server.close(r));
     app.db.close();

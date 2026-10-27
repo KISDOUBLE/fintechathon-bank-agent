@@ -4,15 +4,28 @@
  */
 
 import http from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { bootstrap } from '../bootstrap.mjs';
 
 const PORT = Number(process.env.WEBHOOK_PORT || 8788);
 const MAX_BODY = 32 * 1024;
+// 渠道共享密钥：配置后必须带 x-webhook-secret，未配置仅限本地演示
+const SECRET = process.env.WEBHOOK_SECRET || '';
+
+function secretOk(header) {
+  if (!SECRET) return true;
+  const a = Buffer.from(String(header ?? ''));
+  const b = Buffer.from(SECRET);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 export function createWebhookChannel(app = bootstrap()) {
   return http.createServer(async (req, res) => {
     if (req.method !== 'POST' || req.url !== '/webhook') {
       return json(res, 404, { error: 'not_found' });
+    }
+    if (!secretOk(req.headers['x-webhook-secret'])) {
+      return json(res, 401, { error: 'unauthorized_channel' });
     }
     let body;
     try {

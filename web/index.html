@@ -65,7 +65,7 @@
   <span class="pill" id="health">连接中…</span>
   <span class="pill" id="modelPill">模型：—</span>
   <span class="spacer"></span>
-  <span class="pill">演示用户 张伟 · u_1001</span>
+  <span class="pill" id="who">未登录</span>
 </header>
 
 <main>
@@ -101,8 +101,34 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { pending: null, busy: false };
+const state = { pending: null, busy: false, token: null };
 const USER = 'u_1001';
+const DEMO_PIN = '123456'; // 演示账号，真实系统应为短信验证码/生物识别
+
+async function login(){
+  const r = await fetch('/api/login', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ userId: USER, pin: DEMO_PIN })
+  });
+  const j = await r.json();
+  if(!r.ok) throw new Error(j.message || '登录失败');
+  state.token = j.token;
+  $('who').textContent = `已登录 ${j.user.name}`;
+  return j;
+}
+
+/** 所有业务请求统一带身份令牌；401 自动重新登录一次 */
+async function api(path, body){
+  const res = await fetch(path, {
+    method: body ? 'POST' : 'GET',
+    headers: { ...(body ? {'Content-Type':'application/json'} : {}), ...(state.token ? {Authorization:`Bearer ${state.token}`} : {}) },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if(res.status === 401){ await login(); return api(path, body); }
+  const j = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(j.message || j.error || `HTTP ${res.status}`);
+  return j;
+}
 
 const LEVEL_TEXT = { green: '绿色 · 自动执行', yellow: '黄色 · 需确认', red: '红色 · 拦截' };
 
@@ -136,11 +162,7 @@ async function send(text){
   addMsg('user', escapeHtml(text));
   $('input').value = '';
   try{
-    const res = await fetch('/api/chat', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ userId: USER, text })
-    });
-    const out = await res.json();
+    const out = await api('/api/chat', { text });
     renderReply(out);
   }catch(e){
     addMsg('agent', `<span class="badge b-red">错误</span><div>${escapeHtml(e.message)}</div>`);
@@ -175,11 +197,7 @@ $('okBtn').onclick = async () => {
   const p = state.pending; if(!p || state.busy) return;
   state.busy = true;
   try{
-    const res = await fetch('/api/confirm', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ userId: USER, token: p.token, mfaCode: $('mfaCode').value })
-    });
-    const out = await res.json();
+    const out = await api('/api/confirm', { token: p.token, mfaCode: $('mfaCode').value });
     if(out.status === 'need_confirm' && out.confirm){ state.pending = out.confirm; }
     else closeConfirm();
     renderReply(out);
@@ -187,7 +205,7 @@ $('okBtn').onclick = async () => {
 };
 
 $('cancelBtn').onclick = async () => {
-  await fetch('/api/cancel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER})});
+  await api('/api/cancel', {});
   closeConfirm();
   addMsg('system', '已取消，本次没有执行任何资金操作');
   refreshAudit();
@@ -208,7 +226,7 @@ $('chips').onclick = (e) => { const b = e.target.closest('.chip'); if(b) send(DE
 
 async function refreshAudit(){
   try{
-    const [h, a] = await Promise.all([fetch('/api/health').then(r=>r.json()), fetch('/api/audit?limit=24').then(r=>r.json())]);
+    const [h, a] = await Promise.all([fetch('/api/health').then(r=>r.json()), api('/api/audit?limit=24')]);
     $('health').textContent = h.ok ? `账本平衡 ${h.balanceBalanced ? '✓' : '✗'} · 审计链 ${h.auditIntact ? '✓' : '✗'}` : '异常';
     $('health').className = 'pill ' + (h.ok && h.balanceBalanced && h.auditIntact ? 'on' : '');
     $('modelPill').textContent = `模型：${h.llm ? h.model : '规则模式（未配置密钥）'}`;
@@ -221,7 +239,7 @@ async function refreshAudit(){
 }
 
 addMsg('system', '本地确定性风控内核已就绪。所有资金动作经工具层独立鉴权，判定结果附带规则名与阈值。');
-refreshAudit();
+login().then(() => refreshAudit()).catch((e) => addMsg('system', `登录失败：${e.message}`));
 </script>
 </body>
 </html>

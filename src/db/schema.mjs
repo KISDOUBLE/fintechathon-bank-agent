@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
   phone       TEXT NOT NULL UNIQUE,
   kyc_level   INTEGER NOT NULL DEFAULT 1,
   locked      INTEGER NOT NULL DEFAULT 0,
+  pin_salt    TEXT,
+  pin_hash    TEXT,
   created_at  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS accounts (

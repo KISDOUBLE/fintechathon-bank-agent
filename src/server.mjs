@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { bootstrap } from './bootstrap.mjs';
+import { issueToken, verifyToken, isLoginLocked, recordLoginFailure, clearLoginFailures } from './auth/session.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.join(__dirname, '..', 'web');
@@ -20,6 +21,38 @@ export function createServer(app = bootstrap()) {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         return sendFile(res, path.join(WEB_ROOT, 'index.html'), 'text/html; charset=utf-8');
       }
+      if (req.method === 'POST' && url.pathname === '/api/login') {
+        const body = await readJson(req);
+        const userId = String(body.userId ?? '');
+        const pin = String(body.pin ?? '');
+        if (isLoginLocked(userId)) {
+          return sendJson(res, 429, { error: 'too_many_attempts', message: '登录尝试过多，请 60 秒后再试' });
+        }
+        const user = app.db.authenticatePin(userId, pin);
+        if (!user) {
+          recordLoginFailure(userId);
+          app.audit.append({ traceId: `login_${Date.now()}`, actor: userId || 'anonymous', event: 'auth.login_failed', level: 'red', detail: { userId } });
+          return sendJson(res, 401, { error: 'invalid_credentials' });
+        }
+        clearLoginFailures(userId);
+        const { token, expiresIn } = issueToken(userId);
+        app.audit.append({ traceId: `login_${Date.now()}`, actor: userId, event: 'auth.login', detail: { ttlSec: expiresIn } });
+        return sendJson(res, 200, { token, expiresIn, user: { id: user.id, name: user.name } });
+      }
+
+      // 除登录与健康检查外，所有 API 都必须携带身份令牌
+      let authUser = null;
+      if (url.pathname.startsWith('/api/') && url.pathname !== '/api/health') {
+        const header = req.headers.authorization || '';
+        const raw = header.startsWith('Bearer ') ? header.slice(7) : req.headers['x-session-token'];
+        const v = verifyToken(raw);
+        if (!v.ok) {
+          return sendJson(res, 401, { error: 'unauthorized', reason: v.reason });
+        }
+        authUser = app.db.getUser(v.userId);
+        if (!authUser) return sendJson(res, 401, { error: 'unknown_user' });
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/health') {
         return sendJson(res, 200, {
           ok: true,
@@ -39,8 +72,11 @@ export function createServer(app = bootstrap()) {
       }
       if (req.method === 'POST' && url.pathname === '/api/chat') {
         const body = await readJson(req);
+        if (body.userId && body.userId !== authUser.id) {
+          return sendJson(res, 403, { error: 'user_mismatch', message: '请求体用户与登录身份不一致' });
+        }
         const out = await app.agent.handle({
-          userId: body.userId || 'u_1001',
+          userId: authUser.id,
           text: String(body.text ?? ''),
           channel: 'web',
           newDevice: Boolean(body.newDevice),
@@ -49,8 +85,11 @@ export function createServer(app = bootstrap()) {
       }
       if (req.method === 'POST' && url.pathname === '/api/confirm') {
         const body = await readJson(req);
+        if (body.userId && body.userId !== authUser.id) {
+          return sendJson(res, 403, { error: 'user_mismatch' });
+        }
         const out = await app.agent.confirm({
-          userId: body.userId || 'u_1001',
+          userId: authUser.id,
           token: String(body.token ?? ''),
           mfaCode: body.mfaCode == null ? null : String(body.mfaCode),
         });
@@ -58,7 +97,7 @@ export function createServer(app = bootstrap()) {
       }
       if (req.method === 'POST' && url.pathname === '/api/cancel') {
         const body = await readJson(req);
-        return sendJson(res, 200, app.agent.cancel({ userId: body.userId || 'u_1001' }));
+        return sendJson(res, 200, app.agent.cancel({ userId: authUser.id }));
       }
       return sendJson(res, 404, { error: 'not_found' });
     } catch (err) {

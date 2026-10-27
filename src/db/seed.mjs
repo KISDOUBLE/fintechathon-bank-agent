@@ -26,6 +26,13 @@ export function seed(db) {
   );
   for (const [id, name, phone, kyc] of users) insUser.run(id, name, phone, kyc, now);
 
+  // 演示用登录 PIN（真实系统应为 OTP / 生物识别）
+  const DEMO_PIN = '123456';
+  for (const [id] of users) {
+    const row = db.db.prepare('SELECT pin_hash FROM users WHERE id = ?').get(id);
+    if (!row?.pin_hash) db.setUserPin(id, DEMO_PIN);
+  }
+
   const insAcct = db.db.prepare(
     'INSERT OR IGNORE INTO accounts (id, user_id, kind, balance_cents) VALUES (?, ?, ?, ?)',
   );

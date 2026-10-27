@@ -86,10 +86,39 @@ node scripts/llm-test.mjs
 - **幻觉**：回复模板只引用工具返回值；`checkGroundedness()` 可校验回复中的每个金额是否出现在工具结果里。
 - **不可执行**：模型提出的工具调用走同一套 `ToolRegistry`，没有旁路。
 
+## 身份与令牌
+
+服务端**不认识"你说你是谁"，只认令牌**。
+
+```bash
+# 1. 登录换令牌（演示账号 PIN 123456）
+curl -X POST http://127.0.0.1:8787/api/login \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"u_1001","pin":"123456"}'
+# → {"token":"eyJzdWIiOiJ1XzEwMDEi...","expiresIn":1800}
+
+# 2. 之后每个请求都带 Authorization: Bearer <token>
+curl -X POST http://127.0.0.1:8787/api/chat \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"查一下余额"}'
+```
+
+| 机制 | 行为 |
+| :--- | :--- |
+| 令牌签名 | HMAC-SHA256，无状态；改一个字符就失效 |
+| 有效期 | 30 分钟（`SESSION_TTL_MS` 可调），过期返回 401 |
+| 身份绑定 | 后端从令牌取 userId，忽略请求体；两者不一致返回 403 |
+| PIN 存储 | scrypt 加盐派生，库里只有 64 位哈希 |
+| 撞库防护 | 同一用户连续 5 次失败锁 60 秒（429） |
+| 渠道 | 配置 `WEBHOOK_SECRET` 后，webhook 必须带 `x-webhook-secret` |
+
+演示账号：`u_1001 / 123456`。真实系统应换成短信验证码或生物识别——这是 `docs/` 里必须写明的限制。
+
 ## 测试
 
 ```
-57 个单元测试 + 7 项离线冒烟 + 50 条端到端评测，全部通过。
+66 个单元测试 + 7 项离线冒烟 + 50 条端到端评测，全部通过。
 ```
 
 端到端评测走真实 HTTP 渠道，每条用例一套独立内存账本，判定口径是**三步全对**：
