@@ -141,12 +141,13 @@ s = prs.slides.add_slide(prs.slide_layouts[6])
 bg(s, NAVY)
 rect(s, 0, Inches(6.9), Inches(13.333), Inches(0.6), RGBColor(0x0C, 0x12, 0x24), None)
 text(s, Inches(0.9), Inches(1.55), Inches(11.5), Inches(0.4), "2026 FinTechathon · 微众银行金融科技大学生挑战赛 · 国内人工智能赛道", 13, False, RGBColor(0x9F, 0xB0, 0xD8))
-text(s, Inches(0.9), Inches(2.15), Inches(11.5), Inches(1.1), "银行 AI 智能体", 52, True, WHITE)
-text(s, Inches(0.9), Inches(3.35), Inches(11.5), Inches(0.7), "一个「不会乱动钱」的执行引擎", 26, False, RGBColor(0xC9, 0xD6, 0xF5))
-line = s.shapes.add_connector(1, Inches(0.95), Inches(4.25), Inches(4.2), Inches(4.25))
+text(s, Inches(0.9), Inches(2.0), Inches(11.5), Inches(1.3), "令行", 66, True, WHITE)
+text(s, Inches(0.95), Inches(3.42), Inches(11.5), Inches(0.4), "LINGXING · 银行 AI 智能体", 15, False, RGBColor(0x7F, 0x9B, 0xFF))
+text(s, Inches(0.9), Inches(3.85), Inches(11.5), Inches(0.7), "一个「不会乱动钱」的执行引擎", 26, False, RGBColor(0xC9, 0xD6, 0xF5))
+line = s.shapes.add_connector(1, Inches(0.95), Inches(4.6), Inches(4.2), Inches(4.6))
 line.line.color.rgb = BLUE
 line.line.width = Pt(4)
-text(s, Inches(0.9), Inches(4.55), Inches(11.0), Inches(1.2),
+text(s, Inches(0.9), Inches(4.9), Inches(11.0), Inches(1.2),
      "大模型只负责听懂与提议，资金动作由确定性代码在权限边界内执行。\n六个场景全覆盖 · 判定逐条可解释 · 零第三方依赖 · 断网可跑", 16, False, RGBColor(0xB8, 0xC6, 0xE8))
 text(s, Inches(0.9), Inches(6.95), Inches(11.5), Inches(0.35), "v0.9.0 · 87 项单元测试 / 59 条端到端用例", 12, False, RGBColor(0x8E, 0xA0, 0xC4))
 
