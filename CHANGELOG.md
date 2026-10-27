@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.7.0 — 2026-10-27
+
+提交包与数据自查。
+
+### 新增
+- `scripts/package.mjs`：先跑 CI，再打 `submission/03-源代码与部署材料.tar.gz`，自动排除 `.env`、`data/`、`.git`、`node_modules`，打包后重新列内容校验，超 300MB 直接失败，输出 SHA256 清单。
+- `scripts/db-info.mjs`：数据自查，显示账本位置、表与行数、敏感字段存储形式（PIN 是否明文）。
+- `submission/README.md`：五项材料清单与提交前检查。
+
+### 修复
+- 中文文件名在 tar 中按本地编码存储，Linux 解压会乱码 → 文档改为 `01-technical-doc.md` / `04-security-report.md`。
+
+### 验证
+- 打包体积 79.5 KB，65 个条目。
+- 干净目录解压后跑 `node scripts/ci.mjs`：71 单测、7 冒烟、50 评测全过；包内无 `.env`、无 `data/bank.db`。
+
 ## v0.6.0 — 2026-10-27
 
 文档与代码对齐，补齐交付壳子。

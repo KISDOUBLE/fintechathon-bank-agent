@@ -17,6 +17,7 @@
     "eval:llm": "node eval/run.mjs --llm",
     "seed": "node scripts/seed.mjs",
     "reset": "node scripts/reset.mjs",
-    "llm-test": "node scripts/llm-test.mjs"
+    "llm-test": "node scripts/llm-test.mjs",
+    "package": "node scripts/package.mjs"
   }
 }

@@ -9,3 +9,6 @@ data/*.db-shm
 eval/report.json
 submission/*.zip
 submission/*.pdf
+submission/*.tar.gz
+submission/*.7z
+submission/manifest.json
